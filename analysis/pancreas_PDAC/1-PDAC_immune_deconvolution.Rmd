@@ -1,0 +1,164 @@
+---
+title: "PDAC_ICA_integration"
+author: "Marc Elosua-Bayes"
+date: "5/10/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+In this R Markdown document we're going to integrate th4e Immunce Cancer Cell Atlas with ST.
+
+## Libraries
+```{r}
+library(NMF)
+library(nnls)
+library(dplyr)
+library(ggplot2)
+library(purrr)
+library(Seurat)
+library(SPOTlight)
+library(edgeR)
+library(Spaniel)
+```
+
+## Parameters
+```{r}
+#### Setting vrs ####
+tech <- "sc"
+tissue <- "pdac"
+dwn_smplng <- "both"
+org <- "hs"
+source("misc/paths_vrs.R")
+
+clust_vr <- "cell_type_specific"
+cl_n <- 100
+method <- "nsNMF"
+transf <- "uv"
+hvg <- 3000
+FC <- 1
+pct1 <- 0.9
+
+id_nmf <- sprintf("cln-%s_transf-%s_method-%s_hvg-%s_FC-%s_pct1-%s", 
+                  cl_n, transf, method, hvg, FC, pct1)
+
+# sample dictionary
+sample_dict <- list()
+sample_dict[["GSM3036911"]] = "PDAC-A ST1"
+sample_dict[["GSM3405534"]] = "PDAC-B ST1"
+sample_dict[["GSM4100721"]] = "PDAC-A ST2"
+sample_dict[["GSM4100722"]] = "PDAC-A ST3"
+sample_dict[["GSM4100723"]] = "PDAC-B ST2"
+sample_dict[["GSM4100724"]] = "PDAC-B ST3"
+sample_dict[["GSM4100725"]] = "PDAC-D ST1"
+sample_dict[["GSM4100726"]] = "PDAC-E ST1"
+sample_dict[["GSM4100727"]] = "PDAC-F ST1"
+sample_dict[["GSM4100728"]] = "PDAC-G ST1"
+```
+
+## Load data
+```{r}
+# general_markers <- readRDS("data/immune_cancer_atlas/Atlas_general_markers_150.rds")
+specific_markers <- readRDS("data/immune_cancer_atlas/Atlas_specific_markers_150.rds")
+
+ica_se <- readRDS("data/immune_cancer_atlas/pancreas_new_celltypes_100.rds")
+ica_se <- ica_se[, !ica_se$specific_cell_type %in% c("Macro_2", "Macro_3")]
+```
+
+Make dataframes from the list to initiliaze the matrix
+```{r}
+# general_markers_df <- lapply(names(general_markers), function(ct) {
+#   tmp_df <- data.frame(cluster = ct,
+#                        gene = general_markers[[ct]],
+#                        p_val = 0)
+#   return(tmp_df)
+# }) %>% dplyr::bind_rows()
+# 
+# general_markers_df$cluster <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+#                                      x = general_markers_df$cluster, 
+#                                      perl = TRUE)
+
+specific_markers_df <- lapply(names(specific_markers), function(ct) {
+  tmp_df <- data.frame(cluster = ct,
+                       gene = specific_markers[[ct]],
+                       p_val = 0)
+  return(tmp_df)
+}) %>% dplyr::bind_rows()
+
+specific_markers_df$cluster <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                     x = specific_markers_df$cluster, 
+                                     perl = TRUE)
+
+```
+
+```{r}
+# gen_ct <- ica_se$general_cell_type
+# ica_se$general_cell_type <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+#                                      x = ica_se$general_cell_type, 
+#                                      perl = TRUE)
+
+sp_ct <- ica_se$specific_cell_type
+ica_se$specific_cell_type <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                     x = ica_se$specific_cell_type, 
+                                     perl = TRUE)
+```
+
+### Spatial transcriptomics
+This data comes from the paper [Integrating microarray-based spatial transcriptomics and single-cell RNA-seq reveals tissue architecture in pancreatic ductal adenocarcinomas](https://www.nature.com/articles/s41587-019-0392-8)
+It can be accessed under GEO accession number GSE111672.
+
+```{r}
+sample_geo <- c("GSM3036911", "GSM3405534", "GSM4100721", "GSM4100722",
+                "GSM4100723", "GSM4100724")
+
+st_list <- sapply(sample_geo, USE.NAMES = TRUE, function(geo) {
+  print(geo)
+  sample <- stringr::str_split(string = sample_dict[[geo]], pattern = " ")[[1]][1]
+  geo_path <- sprintf("analysis/pancreas_PDAC/data/%s/%s", sample, geo)
+  st_tibble <- readr::read_tsv(file = sprintf("%s/filtered_feature_bc_matrix.tsv", geo_path), 
+                            col_names = TRUE) %>%
+    tibble::column_to_rownames("X1")
+  
+  st_se <- Spaniel::createSeurat(counts = st_tibble, 
+               barcodeFile = sprintf("%s/spatial/tissue_positions_list_spatial_object.tsv", geo_path), 
+               projectName = "PDAC-B",
+               sectionNumber = "1")
+  st_se <- Seurat::ScaleData(st_se)
+
+  ### Load histological image into R
+  fn_image <- list.files(path = sprintf("%s/spatial", geo_path), pattern = "lowres_rot.jpg$")[1]
+  imgFile <- sprintf("%s/spatial/%s", geo_path, fn_image)
+  image <- Spaniel::parseImage(imgFile)
+  st_se@images <- list(image)
+  
+  st_se$slice <- sample_dict[[geo]]
+  return(list(st_se))
+})
+```
+
+## Specific cell type deconvolution
+```{r}
+specific_decon_mtrx_ls <- lapply(sample_geo, function(geo) {
+  st_se <- st_list[[geo]]
+  
+  decon_mtrx <- SPOTlight::spotlight_deconvolution(se_sc = ica_se,
+                                     counts_spatial = st_se@assays$RNA@counts,
+                                     clust_vr = "specific_cell_type",
+                                     cluster_markers = specific_markers_df,
+                                     cl_n = cl_n,
+                                     hvg = hvg,
+                                     ntop = NULL,
+                                     transf = transf,
+                                     method = method,
+                                     min_cont = 0.01)
+  
+  saveRDS(object = decon_mtrx,
+          file = sprintf("%s/%s/decon_mtrx_ica-integration_specific_%s_%s_%s.RDS", 
+                         an_pdac, robj_dir, geo, id_comp, id_nmf))
+  return(decon_mtrx)
+})
+```
+

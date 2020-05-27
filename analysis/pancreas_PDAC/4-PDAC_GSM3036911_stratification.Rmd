@@ -1,0 +1,894 @@
+---
+title: "PDAC-A stratification"
+author: "Marc Elosua-Bayes"
+date: "5/14/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+In this Rmarkdown document we will divide the spots into cancer and non-cancer and then check if there is region-specific immune cell enrichment.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(NMF)
+library(purrr)
+library(tibble)
+library(ggplot2)
+library(Matrix)
+library(Seurat)
+library(Spaniel)
+library(SPOTlight)
+library(flextable)
+source("utils/bin.r")
+source("utils/spatial_plot_spaniel.R")
+```
+Paths
+```{r}
+#### Setting vrs ####
+tech <- "sc"
+tissue <- "pdac_unpaired"
+dwn_smplng <- "both"
+org <- "hs"
+source("misc/paths_vrs.R")
+
+clust_vr <- "cell_type_specific"
+cl_n <- 100
+method <- "nsNMF"
+transf <- "uv"
+hvg <- 3000
+ntop <- NULL
+FC <- "all"
+pct1 <- "all"
+
+id_nmf <- sprintf("cln-%s_transf-%s_method-%s_hvg-%s_FC-%s_pct1-%s", 
+                  cl_n, transf, method, hvg, FC, pct1)
+
+
+library(RColorBrewer)
+n <- 60
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector  <-  unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+
+
+# sample dictionary
+sample_dict <- list()
+sample_dict[["GSM3036911"]] = "PDAC-A ST1"
+sample_dict[["GSM3405534"]] = "PDAC-B ST1"
+sample_dict[["GSM4100721"]] = "PDAC-A ST2"
+sample_dict[["GSM4100722"]] = "PDAC-A ST3"
+sample_dict[["GSM4100723"]] = "PDAC-B ST2"
+sample_dict[["GSM4100724"]] = "PDAC-B ST3"
+
+pdac_a_smpl <- c("GSM3036911", "GSM4100721", "GSM4100722")
+pdac_b_smpl <- c("GSM3405534", "GSM4100723", "GSM4100724")
+pdac_smpl <- c(pdac_a_smpl, pdac_b_smpl)
+
+dir.create(path = sprintf("%s/%s", an_pdac, plt_dir), showWarnings = FALSE, recursive = TRUE)
+dir.create(path = sprintf("%s/%s", an_pdac, robj_dir), showWarnings = FALSE, recursive = TRUE)
+```
+
+
+## Load data
+### scRNAseq data
+```{r}
+ica_se <- readRDS("data/immune_cancer_atlas/pancreas_new_celltypes_100.rds")
+ica_se <- ica_se[, !ica_se$specific_cell_type %in% c("Macro_2", "Macro_3")]
+```
+
+### Spatial data
+```{r}
+st_list <- sapply(pdac_smpl, USE.NAMES = TRUE, function(geo) {
+  print(geo)
+  sample <- stringr::str_split(string = sample_dict[[geo]], pattern = " ")[[1]][1]
+  geo_path <- sprintf("analysis/pancreas_PDAC/data/%s/%s", sample, geo)
+  st_tibble <- readr::read_tsv(file = sprintf("%s/filtered_feature_bc_matrix.tsv", geo_path), 
+                            col_names = TRUE) %>%
+    tibble::column_to_rownames("X1")
+  
+  st_se <- Spaniel::createSeurat(counts = st_tibble, 
+               barcodeFile = sprintf("%s/spatial/tissue_positions_list_spatial_object.tsv", geo_path), 
+               projectName = "PDAC-B",
+               sectionNumber = "1")
+  
+  # Scale and normalize the data
+  st_se <- Seurat::SCTransform(st_se)
+  
+  # Dimensionality reduction
+  st_se <- RunPCA(st_se, assay = "SCT", verbose = FALSE)
+  st_se <- FindNeighbors(st_se, reduction = "pca", dims = 1:40)
+  st_se <- FindClusters(st_se, verbose = FALSE)
+  st_se <- RunUMAP(st_se, reduction = "pca", dims = 1:40)
+
+  ### Load histological image into R
+  fn_image <- list.files(path = sprintf("%s/spatial", geo_path), pattern = "lowres_rot.jpg$")[1]
+  imgFile <- sprintf("%s/spatial/%s", geo_path, fn_image)
+  image <- Spaniel::parseImage(imgFile)
+  st_se@images <- list(image)
+  
+  st_se$slice <- sample_dict[[geo]]
+  return(list(st_se))
+})
+```
+
+### Deconvolution matrices
+Load the Paired deconvolution matrices so that we can get the labels of tumoral vs non-tumoral spots
+```{r}
+decon_mtrx_dir <- sprintf("%s/%s", an_pdac, robj_dir)
+decon_fn_ls <- list.files(path = decon_mtrx_dir,
+                       pattern = "^decon_mtrx_paired")
+
+decon_fn_ls <- decon_fn_ls[grepl(pattern = "itai_2",
+                                 x = decon_fn_ls)]
+
+
+paired_decon_mtrx_ls <- lapply(decon_fn_ls, function(fn) {
+  path_str <- paste(decon_mtrx_dir, fn, sep = "/")
+  decon_mtrx <- readRDS(file = path_str)
+  return(decon_mtrx)
+})
+
+names_ls <- sapply(decon_fn_ls, USE.NAMES = FALSE, function(i) stringr::str_split(string = i, pattern = "_")[[1]][4])
+
+names(paired_decon_mtrx_ls) <- names_ls
+```
+
+Load the immune cell atlas matrices to have the immune cells mapped onto the tissue
+```{r}
+decon_mtrx_dir <- sprintf("%s/%s", an_pdac, robj_dir)
+decon_fn_ls <- list.files(path = decon_mtrx_dir,
+                       pattern = "^decon_mtrx_ica-integration_specific")[1:6]
+
+
+
+immune_decon_mtrx_ls <- lapply(decon_fn_ls, function(fn) {
+  path_str <- paste(decon_mtrx_dir, fn, sep = "/")
+  decon_mtrx <- readRDS(file = path_str)
+  return(decon_mtrx)
+})
+
+names_ls <- sapply(decon_fn_ls, USE.NAMES = FALSE, function(i) stringr::str_split(string = i, pattern = "_")[[1]][5])
+
+names(immune_decon_mtrx_ls) <- names_ls
+
+```
+
+### Color dataframe
+Cell type specific color
+```{r}
+cell_types_plt <- sort(unique(ica_se$specific_cell_type))
+
+pdac_plt_names <- data.frame(df_name = gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
+                                            x = cell_types_plt,
+                                            perl = TRUE), 
+                           plt_name = cell_types_plt,
+                           col_ct = col_vector[seq_len(length(cell_types_plt))])
+
+```
+
+Stratification specific color
+```{r}
+strat_plt_col <- data.frame(strat = c("Intermediate", "Non-Tumoral", "Removed manually", "Tumoral"),
+                            strat_col = c("#4DBBD5FF", "#E64B35FF", "lightgrey", "#00A087FF"),
+                            stringsAsFactors = FALSE)
+```
+
+### Visualization
+```{r}
+st_se <- st_list[[1]]
+
+Spaniel::spanielPlot(object = st_se,
+                     grob = st_se@images[[1]], 
+                     plotType = "Cluster", 
+                     clusterRes = "SCT_snn_res.0.8") +
+  theme_void() +
+  coord_fixed(1) +
+  scale_alpha(range = c(1, 1))
+```
+
+### Classify by cancer-cell proportion
+Look at the best threshold to divide cells by tumor/no tumor
+```{r}
+decon_mtrx_paired <- paired_decon_mtrx_ls[[1]]
+
+head(decon_mtrx_paired)
+cancer_prop <- rowSums(decon_mtrx_paired[, c("Cancer.clone.(S100A4)", "Cancer.clone.(TM4SF1)")])
+healthy_prop <- rowSums(decon_mtrx_paired[, c("Acinar.cells", "Centroacinar.ductal.cells", "Terminal.ductal.cells", "Antigen-presenting.ductal.cells", "Tuft.cells" )])
+
+# par(mfrow = c(2, 1))
+st_se[["cancer_prop"]] <- cancer_prop
+st_se[["healthy_prop"]] <- healthy_prop
+```
+
+```{r}
+pt1 <- Spaniel::spanielPlot(object = st_se,
+                     grob = st_se@images[[1]], 
+                     plotType = "Cluster", 
+                     clusterRes = "cancer_prop", 
+                     ptSize = 5) +
+  theme_void() +
+  coord_fixed(1) +
+  scale_alpha(range = c(1, 1)) +
+  scale_color_gradientn(
+        colours = wesanderson::wes_palette("Zissou1", 100, type = "continuous"))
+        # colours = heat.colors(10, rev = TRUE))
+
+pt2 <- Spaniel::spanielPlot(object = st_se,
+                     grob = st_se@images[[1]], 
+                     plotType = "Cluster", 
+                     clusterRes = "healthy_prop", 
+                     ptSize = 5) +
+  theme_void() +
+  coord_fixed(1) +
+  scale_alpha(range = c(1, 1)) +
+  scale_color_gradientn(
+        colours = wesanderson::wes_palette("Zissou1", 100, type = "continuous"))
+        # colours = heat.colors(10, rev = TRUE))
+
+pt3 <- ggplot() +
+  geom_histogram(aes(x = cancer_prop), binwidth = 0.01) +
+  geom_vline(xintercept = 0.25, col = "red")
+
+ggpubr::ggarrange(pt1, pt2, pt3, ncol = 3)
+
+```
+
+### Tissue stratification
+According to the density plot and the visualization we can set an accurate threshold to differentiate tumoral and non-tumoral cells at 0.4.
+```{r}
+st_se[["status_2_territories"]] <- if_else(st_se$cancer_prop > 0.4, "Tumoral", "Non-Tumoral")
+
+# st_se[["status_3_territories"]] <- if_else(st_se$cancer_prop < 0.4 & 
+#                                        st_se$healthy_prop < 0.4 & 
+#                                        st_se$y > 16, "Intermediate",
+#                                      if_else(st_se$cancer_prop > 0.4, "Tumoral", "Non-Tumoral"))
+
+st_se[["status_3_territories"]] <- if_else(st_se$cancer_prop < 0.4 &
+                                             st_se$healthy_prop < 0.4 & 
+                                             st_se$y > 16,
+                                           "Intermediate",
+                                           if_else(st_se$cancer_prop < 0.4 &
+                                             st_se$healthy_prop < 0.4 & 
+                                             st_se$y < 16,
+                                           "Removed manually",
+                                           if_else(st_se$cancer_prop > 0.4,
+                                                   "Tumoral", 
+                                                   "Non-Tumoral")))
+
+```
+
+
+Visualize on the slide health_status_2_territories
+```{r}
+# Inverse Y to flip the coordinates
+data_df <- data.frame(st_se@meta.data)
+data_df$y_inv <- 36 - data_df$y
+
+# data_df[, point_size] <- if_else(data_df[, point_size] == 0, NA_real_, data_df[, point_size])
+
+tmp_plt_2 <- ggplot2::ggplot(data_df,
+                ggplot2::aes_string("x", "y_inv",
+                                    color = "status_2_territories" 
+                                    # alpha = point_alpha
+                                    )) +
+  ggplot2::xlim(1, 33) +
+  ggplot2::ylim(1, 35) +
+  # Layer 1 - Plot image
+  ggplot2::annotation_custom(st_se@images[[1]],
+                             xmin = 1,
+                             xmax = 33,
+                             ymin = 1,
+                             ymax = 35) +
+  # Layer 2 - Plot points
+  geom_point(size = 5, alpha = 0.8) +
+  labs(color = "Tissue stratification") +
+  coord_fixed(1) +
+  theme_void() +
+  scale_color_manual(values = c("#00A087FF", "#E64B35FF"))
+
+tmp_plt_2
+```
+
+Visualize on the slide health_status_3_territories
+```{r}
+# Inverse Y to flip the coordinates
+point_size <- "status_3_territories"
+point_colour <- "status_3_territories"
+data_df <- data.frame(st_se@meta.data)
+data_df$y_inv <- 36 - data_df$y
+
+# data_df[, point_size] <- if_else(data_df[, point_size] == 0, NA_real_, data_df[, point_size])
+
+ind_3 <- which(strat_plt_col$strat == sort(unique(data_df$status_3_territories)))
+plt3_col <- sort(strat_plt_col[ind_3, "strat_col"])
+  
+tmp_plt_3 <- ggplot2::ggplot(data_df,
+                ggplot2::aes_string("x", "y_inv",
+                                    color = "status_3_territories" 
+                                    # alpha = point_alpha
+                                    )) +
+  ggplot2::xlim(1, 33) +
+  ggplot2::ylim(1, 35) +
+  # Layer 1 - Plot image
+  ggplot2::annotation_custom(st_se@images[[1]],
+                             xmin = 1,
+                             xmax = 33,
+                             ymin = 1,
+                             ymax = 35) +
+  # Layer 2 - Plot points
+  geom_point(size = 5) +
+  coord_fixed(1) +
+  theme_void() +
+  scale_color_manual(values = strat_plt_col[strat_plt_col$strat %in% unique(data_df$status_3_territories), "strat_col"])
+tmp_plt_3
+```
+
+Get capture location identifiers to assign tumoral/non-tumoral
+```{r}
+# tumor_id <- colnames(st_se)[, st_se$health_status == 1]
+```
+
+#### Joining immune cell type information
+Transfer assignment to Immune cell mapping
+```{r}
+decon_mtrx_immune <- immune_decon_mtrx_ls[[1]]
+
+decon_mtrx_immune[decon_mtrx_immune > 0] <- 1
+
+decon_df_immune <- data.frame(decon_mtrx_immune)
+
+decon_df_immune$status_2_territories <- st_se@meta.data[, "status_2_territories"]
+```
+
+#### Analyzing status_2_territories
+
+Proportion heatmap
+```{r}
+tmp_df <- decon_df_immune %>%
+  dplyr::select(-c("res_ss")) %>% 
+  dplyr::mutate(total = 1) %>% 
+  dplyr::group_by(status_2_territories) %>% 
+  dplyr::summarise_if(is.numeric, ~sum(.)) %>% 
+  data.frame() %>% 
+  tibble::column_to_rownames("status_2_territories")
+
+prop_df <- tmp_df[, 1:(ncol(tmp_df) - 1)] / tmp_df[, ncol(tmp_df)]
+tmp_dif <- sapply(colnames(prop_df), function(i) prop_df[1, i] - prop_df[2, i])
+
+```
+
+Get difference function
+```{r}
+group_prop_differences <- function(df, grp_vr) {
+  tmp_df <- df %>%
+  # dplyr::select(-c("status_3_territories", "res_ss")) %>% 
+  dplyr::mutate(total = 1) %>% 
+  dplyr::group_by_at(grp_vr) %>% 
+  dplyr::summarise_if(is.numeric, ~sum(.)) %>% 
+  data.frame() %>% 
+  tibble::column_to_rownames(grp_vr)
+
+  prop_df <- tmp_df[, 1:(ncol(tmp_df) - 1)] / tmp_df[, ncol(tmp_df)]
+  tmp_dif <- sapply(colnames(prop_df), function(i) prop_df[1, i] - prop_df[2, i])
+  
+  return(tmp_dif)
+}
+
+```
+
+Permutation test
+```{r}
+set.seed(123)
+
+decon_df_immune2 <- decon_df_immune %>%
+  dplyr::select(-"res_ss")
+
+# Get difference distributions
+perm_diff <- sapply(1:10000, function(iter){
+  
+  shuff_df <- as.data.frame(lapply(decon_df_immune2, sample)) %>% 
+    mutate(status_2_territories = decon_df_immune2$status_2_territories)
+  
+  tmp <- group_prop_differences(df = shuff_df, grp_vr = "status_2_territories")
+  return(tmp)
+})
+
+# Get double tailed pvalue
+perm_pvals <- sapply(seq_len(length(tmp_dif)), function(i){
+  # Get where on the distribution the observed value falls
+  tmp_pval <- mean(perm_diff[i, ] >= tmp_dif[i])
+  
+  # Get the double tailed p value
+  pval <- min(c(tmp_pval, 1 - tmp_pval))
+  return(pval)
+})
+
+adj_perm_pvals <- p.adjust(p = perm_pvals, method = "bonferroni")
+```
+
+Join bootstrapped P values with proportions
+```{r}
+perm_df <- data.frame(t(adj_perm_pvals))
+names(perm_df) <- names(prop_df)
+
+hm_df_2 <- dplyr::bind_rows(prop_df, perm_df)
+rownames(hm_df_2) <- c(rownames(prop_df), "pval")
+```
+
+
+```{r}
+hm_tmp <- t(hm_df_2) %>%
+  data.frame() %>% 
+  tibble::rownames_to_column("cell_type") %>% 
+  tidyr::pivot_longer(cols = c("Non.Tumoral", "Tumoral", "pval"),
+                      names_to = "status",
+                      values_to = "proportion") %>%
+  dplyr::mutate(
+    status = factor(status, levels = c("Non.Tumoral", "Tumoral", "pval"), labels = c("Non Tumoral", "Tumoral", "Adj. Pval"))
+    ) %>%
+  dplyr::left_join(pdac_plt_names, by = c("cell_type" = "df_name")) %>%
+  dplyr::mutate(proportion_mod = if_else(status == "Adj. Pval", 0, proportion),
+                plt_name = as.character(plt_name),
+                plt_name = if_else(plt_name == "Macro_1", "Macrophage", plt_name),
+                plt_name = if_else(plt_name == "Mono", "Monocyte", plt_name),
+                pval = if_else(status == "Adj. Pval", proportion, NA_real_)) %>% 
+  ggplot(aes(x = status, 
+             y = plt_name, 
+             fill= proportion_mod)) + 
+  geom_tile(aes(alpha = proportion_mod)) +
+  geom_text(aes(label = round(pval, 2)),
+            show_guide  = FALSE) +
+  theme_classic() +
+  labs(title = "Cell type enrichment per region",
+       y = "",
+       x = "",
+       fill = "Proportion",
+       alpha = "Proportion") +
+  scale_fill_gradient(low = "#FFF5F0",
+                      high = "#99000D",
+                      guide = "legend",
+                      limits = c(0, 1),
+                      breaks = seq(0, 1, 0.1)) +
+  scale_alpha_continuous(guide = "legend",
+                         limits = c(0, 1), 
+                         breaks = seq(0, 1, 0.1)) +
+  theme(axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 15),
+        legend.text = element_text(size = 12),
+        legend.title = element_text(size = 17),
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 20),
+        axis.title = element_text(size = 15),
+        axis.line = element_blank())
+
+hm_tmp
+ggpubr::ggexport(plotlist = list(hm_tmp, tmp_plt_2),
+                 filename = sprintf("%s/%s/heatmap_pvalue_GSM3036911_status_2_territories.pdf",
+                                    an_pdac, plt_dir),
+                 ncol = 2,
+                 width = 16, 
+                 height = 9, 
+                 res = 600)
+
+ggpubr::ggexport(plotlist = list(hm_tmp, tmp_plt_2),
+                 filename = sprintf("%s/%s/heatmap_pvalue_GSM3036911_status_2_territories_arr.jpg",
+                                    an_pdac, plt_dir),
+                 ncol = 2,
+                 width = 6000, 
+                 height = 4000, 
+                 res = 400)
+
+ggpubr::ggexport(plotlist = list(hm_tmp),
+                 filename = sprintf("%s/%s/heatmap_pvalue_GSM3036911_status_2_territories.jpg",
+                                    an_pdac, plt_dir),
+                 ncol = 2,
+                 width = 3000, 
+                 height = 4000, 
+                 res = 400)
+
+ggpubr::ggexport(plotlist = list(tmp_plt_2),
+                 filename = sprintf("%s/%s/GSM3036911_status_2_territories.jpg",
+                                    an_pdac, plt_dir),
+                 ncol = 2,
+                 width = 4000, 
+                 height = 4000, 
+                 res = 400)
+
+
+```
+
+#### Box plots
+Preparing the dataset
+```{r}
+decon_mtrx_immune <- immune_decon_mtrx_ls[[1]]
+
+decon_df_immune <- data.frame(decon_mtrx_immune)
+
+decon_df_immune$status_2_territories <- st_se@meta.data[, "status_2_territories"]
+
+decon_mtrx_long <- decon_df_immune %>% 
+  dplyr::select(-c("res_ss")) %>% 
+  dplyr::mutate(total = 1) %>%
+  tidyr::pivot_longer(cols = -c(status_2_territories, total), 
+                      names_to = "cell_type", 
+                      values_to = "proportion") %>% 
+  dplyr::left_join(pdac_plt_names, by = c("cell_type" = "df_name")) %>% 
+  dplyr::mutate(plt_name = as.character(plt_name),
+                plt_name = dplyr::if_else(plt_name == "Macro_1", "Macrophage", plt_name),
+                plt_name = dplyr::if_else(plt_name == "Mono", "Monocyte", plt_name),
+                plt_name = dplyr::if_else(plt_name == "CD8 tumor-reactive (exhausted)", "CD8 tumor-reactive", plt_name))
+
+## Add an empty level to get symmetric facets
+# ct = unique(decon_mtrx_long$plt_name)
+# decon_mtrx_long$plt_name_new <- factor(decon_mtrx_long$plt_name, levels = c(ct[1:(length(ct) - 2)], "", ct[(length(ct) - 1):length(ct)]))
+
+
+```
+
+Get Bonferroni adjusted P-values
+```{r}
+# y max per group
+y_pos <- decon_mtrx_long %>% 
+  group_by(cell_type) %>% 
+  summarise(y_max = max(proportion)) %>% 
+  dplyr::pull(y_max)
+
+# annotation table with adjusted pvals and y-position of the labels
+anno_df <- ggpubr::compare_means(proportion ~ status_2_territories,
+                                 method = "wilcox.test",
+                                 group.by = "plt_name",
+                                 data = decon_mtrx_long,
+                                 p.adjust.method = "bonferroni") %>%
+  mutate(y_pos = y_pos - 0.1 * y_pos, 
+         p.adj.txt = paste("p =", p.adj))
+```
+
+Plot faceted boxplots, subseting cell types of interest
+```{r}
+bplt <- decon_mtrx_long %>%
+  filter(cell_type != "MAST") %>% 
+  left_join(anno_df, by = "plt_name") %>% 
+  filter(p.adj < 0.05) %>% 
+  ggpubr::ggboxplot(., x = "status_2_territories", y = "proportion", 
+                  color = "status_2_territories", fill = "status_2_territories",
+                  add = "jitter", alpha = 0.6,
+                  facet.by = "plt_name",
+                  scales = "free",
+                  # palette = "npg",
+                  palette = c("#00A087FF", "#E64B35FF"),
+                  nrow = 2) +
+  # ggplot2::facet_wrap(~plt_name) + 
+  ggpubr::geom_signif(
+    data = anno_df %>% filter(p.adj < 0.05 & plt_name != "MAST"), 
+    aes(xmin = group1, 
+        xmax = group2, 
+        annotations = p.adj.txt, 
+        y_position = y_pos * 1),
+    manual = TRUE)
+
+bplt <- bplt +
+  ggplot2::labs(title = "Spot composition comparison",
+                x = "Tissue stratification",
+                y = "Capture location proportion",
+                fill = "Stratification",
+                color = "Stratification") +
+  ggplot2::theme(
+    strip.text = element_text(size = 12, face = "bold"),
+    axis.text =  element_text(size = 12),
+    axis.title = element_text(size = 15, face = "bold"),
+    legend.position = "right",
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 20),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 15),
+    legend.key.size = unit(3,"line"),
+    # strip.text = element_text(face="bold", size=9),
+    strip.background = element_rect(size = 0.3))
+bplt
+ggpubr::ggexport(plotlist = list(bplt),
+                 filename = sprintf("%s/%s/boxplot_GSM3036911_status_2_territories_filt.pdf",an_pdac, plt_dir),
+                 width = 16,
+                 height = 12,
+                 res = 600)
+
+ggpubr::ggexport(plotlist = list(bplt),
+                 filename = sprintf("%s/%s/boxplot_GSM3036911_status_2_territories_filt.jpg",an_pdac, plt_dir),
+                 width = 6000,
+                 height = 4000,
+                 res = 400)
+
+
+```
+
+Plot faceted boxplots All cell types
+```{r}
+bplt <- decon_mtrx_long %>%
+  ggpubr::ggboxplot(., x = "status_2_territories", y = "proportion", 
+                  color = "status_2_territories", fill = "status_2_territories",
+                  add = "jitter", alpha = 0.6,
+                  facet.by = "plt_name",
+                  scales = "free",
+                  # palette = "npg",
+                  palette = c("#00A087FF", "#E64B35FF")) +
+  # ggplot2::facet_wrap(~plt_name) + 
+  ggpubr::geom_signif(
+    data = anno_df, 
+    aes(xmin = group1, 
+        xmax = group2, 
+        annotations = p.adj.txt, 
+        y_position = y_pos * 1),
+    manual = TRUE)
+
+bplt <- bplt +
+  ggplot2::labs(title = "Spot composition comparison",
+                x = "Tissue stratification",
+                y = "Capture location proportion",
+                fill = "Stratification",
+                color = "Stratification") +
+  ggplot2::theme(
+    strip.text = element_text(size = 12, face = "bold"),
+    axis.text =  element_text(size = 12),
+    axis.title = element_text(size = 15, face = "bold"),
+    legend.position = "right",
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 20),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 15),
+    legend.key.size = unit(3,"line"),
+    # strip.text = element_text(face="bold", size=9),
+    strip.background = element_rect(size = 0.3))
+bplt
+ggpubr::ggexport(plotlist = list(bplt),
+                 filename = sprintf("%s/%s/boxplot_GSM3036911_status_2_territories.pdf",an_pdac, plt_dir),
+                 width = 16,
+                 height = 12,
+                 res = 600)
+
+ggpubr::ggexport(plotlist = list(bplt),
+                 filename = sprintf("%s/%s/boxplot_GSM3036911_status_2_territories.jpg",an_pdac, plt_dir),
+                 width = 6000,
+                 height = 4000,
+                 res = 400)
+
+
+```
+
+#### Analyzing status_3_territories
+Transfer assignment to Immune cell mapping
+```{r}
+decon_mtrx_immune <- immune_decon_mtrx_ls[[1]]
+
+decon_mtrx_immune[decon_mtrx_immune > 0] <- 1
+
+decon_df_immune <- data.frame(decon_mtrx_immune)
+
+decon_df_immune$status_3_territories <- st_se@meta.data[, "status_3_territories"]
+```
+
+Territory location
+```{r}
+# Inverse Y to flip the coordinates
+point_size <- "status_3_territories"
+point_colour <- "status_3_territories"
+data_df <- data.frame(st_se@meta.data)
+data_df$y_inv <- 36 - data_df$y
+
+# data_df[, point_size] <- if_else(data_df[, point_size] == 0, NA_real_, data_df[, point_size])
+
+strat_3_plt <- data_df %>%
+  dplyr::mutate(status_3_territories = dplyr::if_else(data_df$status_3_territories == "Removed manually",
+                                                       "Excluded", status_3_territories)) %>% 
+  ggplot2::ggplot(ggplot2::aes_string("x", "y_inv",
+                                    color = "status_3_territories" 
+                                    # alpha = point_alpha
+                                    )) +
+  ggplot2::xlim(1, 33) +
+  ggplot2::ylim(1, 35) +
+  # Layer 1 - Plot image
+  ggplot2::annotation_custom(st_se@images[[1]],
+                             xmin = 1,
+                             xmax = 33,
+                             ymin = 1,
+                             ymax = 35) +
+  # Layer 2 - Plot points
+  geom_point(size = 5, alpha = 0.8) +
+  labs(title = "Tissue stratification",
+       color = "Stratification") +
+  coord_fixed(1) +
+  theme_void() +
+  scale_color_manual(values = c("lightgrey", "#4DBBD5FF", "#00A087FF", "#E64B35FF")) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 20))
+
+strat_3_plt
+
+ggpubr::ggexport(plotlist = list(strat_3_plt +
+                                   guides(color = guide_legend(override.aes = list(size = 10))) +
+                                   guides(fill = guide_legend(override.aes = list(size = 10))) +
+                                   theme(legend.title = element_text(size = 15, face = "bold"),
+                                         legend.text = element_text(size = 12))),
+                 filename = sprintf("%s/%s/GSM3036911_status_3_territories.jpeg", 
+                                      an_pdac, plt_dir),
+                 width = 5000, height = 4000, res = 400)
+```
+
+Proportion heatmap
+```{r}
+tmp_df <- decon_df_immune %>%
+  dplyr::filter( status_3_territories != "Removed manually") %>% 
+  dplyr::select(-c("res_ss")) %>% 
+  dplyr::mutate(total = 1) %>% 
+  dplyr::group_by(status_3_territories) %>% 
+  dplyr::summarise_if(is.numeric, ~sum(.)) %>% 
+  data.frame() %>% 
+  tibble::column_to_rownames("status_3_territories")
+
+prop_df <- tmp_df[, 1:(ncol(tmp_df) - 1)] / tmp_df[, ncol(tmp_df)]
+
+# tmp_dif <- sapply(colnames(prop_df), function(i) prop_df[1, i] - prop_df[2, i])
+
+```
+
+
+```{r}
+hm_tmp <- t(prop_df) %>%
+  data.frame() %>% 
+  tibble::rownames_to_column("cell_type") %>% 
+  dplyr::filter(cell_type != "res_ss") %>% 
+  tidyr::pivot_longer(cols = c("Non.Tumoral", "Intermediate", "Tumoral"), 
+                      names_to = "health_status", 
+                      values_to = "proportion") %>%
+  dplyr::mutate(health_status = factor(health_status, levels = c("Non.Tumoral", "Intermediate", "Tumoral"))) %>%
+  dplyr::left_join(pdac_plt_names, by = c("cell_type" = "df_name")) %>% 
+  ggplot(aes(x = health_status, 
+             y = plt_name, 
+             fill= proportion)) + 
+  geom_tile() +
+  geom_text(aes(label = round(proportion, 2)), 
+            show_guide  = FALSE) +
+  labs(title = "GSM3036911 Cell-type enrichment by region",
+       y = "Cell types", 
+       x = "",
+       fill = "Proportion") +
+  theme_classic() +
+  scale_fill_gradient(low = "#FFF5F0",
+                      high = "#99000D",
+                      guide = "legend",
+                      limits = c(0, 1),
+                      breaks = seq(0, 1, 0.1)) +
+  scale_alpha_continuous(guide = "legend",
+                         limits = c(0, 1), 
+                         breaks = seq(0, 1, 0.1)) +
+  theme(axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 15),
+        legend.text = element_text(size = 12),
+        legend.title = element_text(size = 17),
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 20),
+        axis.title = element_text(size = 15),
+        axis.line = element_blank())
+
+
+hm_tmp
+ggpubr::ggarrange(plotlist = list(hm_tmp, strat_3_plt),
+                  labels = c("A", "B")) %>% 
+  ggpubr::ggexport(.,
+                   filename = sprintf("%s/%s/heatmap_GSM3036911_status_3_territories.pdf", 
+                                      an_pdac, plt_dir),
+                   width = 16,
+                   height = 9,
+                   res = 600)
+```
+
+#### Box plots
+Preparing the dataset
+```{r}
+decon_mtrx_immune <- immune_decon_mtrx_ls[[1]]
+
+decon_df_immune <- data.frame(decon_mtrx_immune)
+
+decon_df_immune$status_3_territories <- st_se@meta.data[, "status_3_territories"]
+
+decon_mtrx_long <- decon_df_immune %>% 
+  dplyr::filter(status_3_territories != "Removed manually") %>% 
+  dplyr::select(-c("res_ss")) %>% 
+  dplyr::mutate(total = 1) %>%
+  tidyr::pivot_longer(cols = -c(status_3_territories, total), 
+                      names_to = "cell_type", 
+                      values_to = "proportion") %>% 
+  dplyr::left_join(pdac_plt_names, by = c("cell_type" = "df_name")) %>% 
+  dplyr::mutate(plt_name = as.character(plt_name)) %>% 
+  dplyr::filter(cell_type %in% c("B.cell", "CD4.CM", "CD4.naive.like", "CD8.effector.exhausted", "CD8.proliferative", "Plasma.B"))
+```
+
+Perform ANOVA and pairwise t-test and adjust P-values
+```{r}
+# Get max position for each facet
+y_pos <- decon_mtrx_long %>%
+  group_by(plt_name) %>%
+  summarise(y.position = max(proportion))
+
+# Define list of pairwise interactions to test
+my_comparisons <- list( c("Intermediate", "Non-Tumoral"),
+                        c("Non-Tumoral", "Tumoral"),
+                        c("Intermediate", "Tumoral") )
+
+
+# Annova test annotation table with adjusted pvals and y-position of the labels
+anno_df_anova <- ggpubr::compare_means(proportion ~ status_3_territories,
+                                 method = "anova",
+                                 group.by = "plt_name",
+                                 data = decon_mtrx_long,
+                                 p.adjust.method = "bonferroni",
+                                 comparisons = my_comparisons) %>%
+  dplyr::left_join(pdac_plt_names, by = "plt_name") %>% 
+  dplyr::left_join(y_pos, by = "plt_name")
+
+
+# T-test annotation table with adjusted pvals and y-position of the labels
+anno_df_wilcox <- ggpubr::compare_means(proportion ~ status_3_territories,
+                                 method = "wilcox.test",
+                                 group.by = "plt_name",
+                                 data = decon_mtrx_long,
+                                 p.adjust.method = "bonferroni",
+                                 comparisons = my_comparisons) %>%
+  dplyr::left_join(pdac_plt_names, by = "plt_name") %>% 
+  dplyr::left_join(y_pos, by = "plt_name") %>% 
+  dplyr::mutate(y.position = if_else(group1 == "Non-Tumoral" & 
+                                       group2 == "Intermediate", 
+                                     y.position * 0.7, 
+                                     if_else(group1 == "Intermediate" &
+                                               group2 == "Tumoral", 
+                                             y.position * 0.8,
+                                             y.position * 0.93)))
+
+```
+
+```{r}
+p <- ggpubr::ggboxplot(decon_mtrx_long, x = "status_3_territories", y = "proportion",
+                  color = "status_3_territories", fill = "status_3_territories",
+                  add = "jitter", alpha = 0.6,
+                  facet.by = "plt_name", scales = "free", 
+                  repel = TRUE, palette = c("#00A087FF", "#4DBBD5FF", "#E64B35FF"))
+
+# Create a box plot and add the p-value
+# p <- ggboxplot(
+#   decon_mtrx_long, x = "status_3_territories", y = "proportion",
+#   color = "status_3_territories", palette = "npg",
+#   facet.by = "plt_name", ylim = c(0, 1)
+# )
+
+bplt <- p + 
+  ggpubr::stat_pvalue_manual(anno_df_wilcox, label = "p = {p.adj}", size = 6) +
+  ggplot2::labs(
+    # title = "PDAC-A Immune capture location composition comparison 3 section stratification",
+                x = "Tissue stratification",
+                y = "Capture location proportion",
+                fill = "Stratification",
+                color = "Stratification") +
+  ggplot2::theme(
+    strip.text = element_text(size = 12, face = "bold"),
+    axis.text =  element_text(size = 12),
+    axis.title = element_text(size = 14, face = "bold"),
+    legend.position = "right",
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 25),
+    legend.text = element_text(size = 17),
+    legend.title = element_text(size = 20),
+    legend.key.size = unit(3,"line"))
+
+bplt
+ggpubr::ggexport(plotlist = list(bplt),
+                 filename = sprintf("%s/%s/boxplot_GSM3036911_status_3_territories.pdf",an_pdac, plt_dir),
+                 width = 32,
+                 height = 24,
+                 res = 600)
+
+ggpubr::ggexport(plotlist = list(bplt),
+                 filename = sprintf("%s/%s/boxplot_GSM3036911_status_3_territories.jpeg",an_pdac, plt_dir),
+                 width = 6000,
+                 height = 4000,
+                 res = 400)
+
+```
+
+

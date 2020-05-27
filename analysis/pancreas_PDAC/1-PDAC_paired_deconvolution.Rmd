@@ -1,0 +1,630 @@
+---
+title: "PDAC deconvolution with paired data"
+author: "Marc Elosua-Bayes"
+date: "4/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(NMF)
+library(purrr)
+library(tibble)
+library(ggplot2)
+library(Matrix)
+library(Seurat)
+library(Spaniel)
+library(SpatialDeconTest)
+source("utils/bin.r")
+```
+
+## Introduction
+In this R markdown document we will deconvolute spatial transcriptomics data from [Integrating microarray-based spatial transcriptomics and single-cell RNA-seq reveals tissue architecture in pancreatic ductal adenocarcinomas](https://www.nature.com/articles/s41587-019-0392-8). It can be accessed under GEO accession number GSE111672. We will use paired inDrop scRNAseq data to to train the seeded NMFreg model.
+scRNAseq data was obtained using inDrop, between 139-145M paired-reads were  generated for each library (each one containing 2-2.5k cells) corresponding to ~58k paired-reads per cell.
+ST data was obtained with Stahl 2016 ST techonology, capture locations of 100um with a c-t-c distance of 200um.
+
+Paths
+```{r}
+tech <- "indrop"
+tissue <- "pdac_itai_2"
+dwn_smplng <- "both"
+org <- "hs"
+source("misc/paths_vrs.R")
+dir.create(path = sprintf("%s/%s", an_pdac, plt_dir), showWarnings = FALSE, recursive = TRUE)
+dir.create(path = sprintf("%s/%s", an_pdac, robj_dir), showWarnings = FALSE, recursive = TRUE)
+```
+
+Set parameters and IDs
+```{r}
+clust_vr <- "annotation"
+cl_n <- 100
+method <- "nsNMF"
+transf <- "uv"
+hvg <- 3000
+FC <- 1
+pct1 <- 0.9
+
+id_nmf <- sprintf("cln-%s_transf-%s_method-%s_hvg-%s_FC-%s_pct1-%s", 
+                  cl_n, transf, method, hvg, FC, pct1)
+data_dir <- "data/MusMusculus/allen_reference"
+options(stringsAsFactors = FALSE)
+
+
+library(RColorBrewer)
+n <- 60
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector  <-  unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+
+sample_dict <- list()
+sample_dict[["GSM3036911"]] = "PDAC-A ST1"
+sample_dict[["GSM4100721"]] = "PDAC-A ST2"
+sample_dict[["GSM4100722"]] = "PDAC-A ST3"
+sample_dict[["GSM3405534"]] = "PDAC-B ST1"
+sample_dict[["GSM4100723"]] = "PDAC-B ST2"
+sample_dict[["GSM4100724"]] = "PDAC-B ST3"
+```
+
+## Load data
+Next we load scRNAseq data
+```{r}
+# indrop_pdac_a <- readRDS(file = "analysis/pancreas_PDAC/data/pdac_A_annot.rds")
+# indrop_pdac_b <- readRDS(file = "analysis/pancreas_PDAC/data/pdac_B_annot.rds")
+
+indrop_pdac_a <- readRDS(file = "analysis/pancreas_PDAC/data/PDAC-A_itai_processed.RDS")
+indrop_pdac_b <- readRDS(file = "analysis/pancreas_PDAC/data/PDAC-B_itai_processed.RDS")
+```
+
+Remove RBCs
+```{r}
+indrop_pdac_a <- indrop_pdac_a[, indrop_pdac_a$annotation != "RBCs"]
+indrop_pdac_b <- indrop_pdac_b[, indrop_pdac_b$annotation != "RBCs"]
+```
+
+Here we load ST data, since we have 3 slides for PDAC-A and 3 slides ofr PDAC-B we'll have 2 separate list we'll move in parallel with
+ST data for PDAC-A:
+```{r}
+sample_pdac_a <- c("GSM3036911", "GSM4100721", "GSM4100722")
+
+st_a_list <- sapply(sample_pdac_a, USE.NAMES = TRUE, function(geo) {
+  print(geo)
+  sample <- stringr::str_split(string = sample_dict[[geo]], pattern = " ")[[1]][1]
+  geo_path <- sprintf("analysis/pancreas_PDAC/data/%s/%s", sample, geo)
+  st_tibble <- readr::read_tsv(file = sprintf("%s/filtered_feature_bc_matrix.tsv", geo_path), 
+                            col_names = TRUE) %>%
+    tibble::column_to_rownames("X1")
+  
+  st_se <- Spaniel::createSeurat(counts = st_tibble, 
+               barcodeFile = sprintf("%s/spatial/tissue_positions_list_spatial_object.tsv", geo_path), 
+               projectName = "PDAC-B",
+               sectionNumber = "1")
+  st_se <- Seurat::ScaleData(st_se)
+
+  ### Load histological image into R
+  fn_image <- list.files(path = sprintf("%s/spatial", geo_path), pattern = "lowres_rot.jpg$")[1]
+  imgFile <- sprintf("%s/spatial/%s", geo_path, fn_image)
+  image <- Spaniel::parseImage(imgFile)
+  st_se@images <- list(image)
+  
+  st_se$slice <- sample_dict[[geo]]
+  return(list(st_se))
+})
+```
+
+ST data for PDAC-B:
+```{r}
+sample_pdac_b <- c("GSM3405534", "GSM4100723", "GSM4100724")
+
+st_b_list <- sapply(sample_pdac_b, USE.NAMES = TRUE, function(geo) {
+  print(geo)
+  sample <- stringr::str_split(string = sample_dict[[geo]], pattern = " ")[[1]][1]
+  geo_path <- sprintf("analysis/pancreas_PDAC/data/%s/%s", sample, geo)
+  st_tibble <- readr::read_tsv(file = sprintf("%s/filtered_feature_bc_matrix.tsv", geo_path), 
+                            col_names = TRUE) %>%
+    tibble::column_to_rownames("X1")
+  
+  st_se <- Spaniel::createSeurat(counts = st_tibble, 
+               barcodeFile = sprintf("%s/spatial/tissue_positions_list_spatial_object.tsv", geo_path), 
+               projectName = "PDAC-B",
+               sectionNumber = "1")
+  st_se <- Seurat::ScaleData(st_se)
+
+  ### Load histological image into R
+  fn_image <- list.files(path = sprintf("%s/spatial", geo_path), pattern = "lowres_rot.jpg$")[1]
+  imgFile <- sprintf("%s/spatial/%s", geo_path, fn_image)
+  image <- Spaniel::parseImage(imgFile)
+  st_se@images <- list(image)
+  
+  st_se$slice <- sample_dict[[geo]]
+  return(list(st_se))
+})
+```
+
+
+## Spatial Deconvolution
+### PDAC-A
+#### Marker genes
+```{r}
+#### Extract the top marker genes from each cluster ####
+Seurat::Idents(object = indrop_pdac_a) <- indrop_pdac_a@meta.data[, clust_vr]
+cluster_markers_a <- Seurat::FindAllMarkers(object = indrop_pdac_a,
+                                              verbose = TRUE,
+                                              only.pos = TRUE,
+                                              assay = "SCT",
+                                              slot = "data")
+
+# cluster_markers_all <- readRDS(file = sprintf("%s/%s/cluster_markers_%s_paula_specific.RDS",
+#                        an_mouse, robj_dir, id_comp))
+
+cluster_markers_filt_a <- cluster_markers_a %>%
+  filter(avg_logFC > 1 & pct.1 > 0.75)
+
+cluster_markers_filt_a$cluster <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                     x = cluster_markers_filt_a$cluster, 
+                                     perl = TRUE)
+
+# indrop_pdac_a_down <- downsample_se_obj(indrop_pdac_a,
+#                                       clust_vr,
+#                                       cluster_markers_filt_a,
+#                                       cl_n = cl_n, hvg = hvg)
+```
+
+#### PDAC-A Slide Deconvolution
+```{r}
+decon_mtrx_a_ls <- lapply(names(st_a_list), function(nam) {
+  print(nam)
+  st_se <- st_a_list[[nam]]
+  print(Sys.time())
+  
+  decon_mtrx <- SPOTlight::spotlight_deconvolution(se_sc = indrop_pdac_a,
+                                        counts_spatial = st_se@assays$RNA@counts,
+                                        cluster_markers = cluster_markers_filt_a,
+                                        cl_n = cl_n,
+                                        hvg = hvg,
+                                        ntop = NULL,
+                                        transf = transf,
+                                        clust_vr = clust_vr,
+                                        method = method,
+                                        min_cont = 0.01)
+  
+  saveRDS(object = decon_mtrx,
+          file = sprintf("%s/%s/decon_mtrx_paired_%s_%s_%s.RDS",
+                         an_pdac, robj_dir, nam, id_comp, id_nmf))
+  return(decon_mtrx)
+})
+
+```
+
+### PDAC-B
+#### Marker genes
+
+```{r}
+#### Extract the top marker genes from each cluster ####
+Seurat::Idents(object = indrop_pdac_b) <- indrop_pdac_b@meta.data[, clust_vr]
+cluster_markers_b <- Seurat::FindAllMarkers(object = indrop_pdac_b,
+                                              verbose = TRUE,
+                                              only.pos = TRUE,
+                                              assay = "SCT",
+                                              slot = "data")
+
+# cluster_markers_all <- readRDS(file = sprintf("%s/%s/cluster_markers_%s_paula_specific.RDS",
+#                        an_mouse, robj_dir, id_comp))
+
+cluster_markers_filt_b <- cluster_markers_b %>%
+  filter(avg_logFC > 1 & pct.1 > 0.75)
+
+cluster_markers_filt_b$cluster <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                     x = cluster_markers_filt_b$cluster, 
+                                     perl = TRUE)
+```
+
+#### PDAC-B Slide Deconvolution
+```{r}
+decon_mtrx_b_ls <- lapply(names(st_b_list), function(nam) {
+  print(nam)
+  st_se <- st_b_list[[nam]]
+  print(Sys.time())
+  
+  decon_mtrx <- SPOTlight::spotlight_deconvolution(se_sc = indrop_pdac_b,
+                                        counts_spatial = st_se@assays$RNA@counts,
+                                        cluster_markers = cluster_markers_filt_b,
+                                        cl_n = cl_n,
+                                        hvg = hvg,
+                                        ntop = NULL,
+                                        transf = transf,
+                                        clust_vr = clust_vr,
+                                        method = method,
+                                        min_cont = 0.01)
+  
+  saveRDS(object = decon_mtrx,
+          file = sprintf("%s/%s/decon_mtrx_paired_%s_%s_%s.RDS",
+                         an_pdac, robj_dir, nam, id_comp, id_nmf))
+  return(decon_mtrx)
+})
+
+```
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE)
+```
+
+### Visualization
+Create a dictionary with equivalence cell type and its gene marker
+```{r}
+# genes shared across all libraries
+common_names <-  purrr::reduce(lapply(st_a_list, row.names), intersect)
+
+ct_gene_df <- lapply(unique(cluster_markers_a$cluster), function(clust) {
+  ls1 <- cluster_markers_a[cluster_markers_a$cluster == clust, "gene"]
+  ls2 <- cluster_markers_a[cluster_markers_a$cluster != clust, "gene"]
+  ls1_unique <- ls1[! ls1 %in% ls2]
+
+  return(cluster_markers_a[cluster_markers_a$cluster == clust & cluster_markers_a$gene %in% ls1_unique, ])
+}) %>%
+  bind_rows() %>%
+  filter(gene %in% common_names) %>% 
+  group_by(cluster) %>% 
+  arrange(cluster, p_val) %>% 
+  # top_n(1) %>%
+  filter(row_number() == 1) %>%
+  data.frame()
+```
+
+#### Spatial location
+dataframe with plot names
+```{r}
+decon_mtrx <- decon_a_ls[[1]]
+cell_types <- colnames(decon_mtrx)[! colnames(decon_mtrx) %in% "res_ss"]
+cell_types <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                 x = cell_types, 
+                                 perl = TRUE)
+
+plt_names <- sort(unique(indrop_pdac_a@meta.data[, clust_vr]))
+
+df_plt_names <- data.frame(df_name = cell_types, 
+                           plt_name = plt_names)
+```
+
+Plot gene + cell type expression/location respectively
+```{r}
+sapply(names(decon_a_ls), USE.NAMES = TRUE, function(geo) {
+  print(geo)
+  decon_mtrx <- decon_a_ls[[geo]]
+  cell_types <- colnames(decon_mtrx)[! colnames(decon_mtrx) %in% "res_ss"]
+  decon_mtrx_prop <- round(decon_mtrx[, cell_types] / rowSums(decon_mtrx[, cell_types]), 4)
+  st_se <- st_a_list[[geo]]
+  
+  ### 1st plot the marker gene for that cell type
+  gene_plt <- lapply(cell_types, function(ct) {
+    print(ct)
+    ct_gene_df$cluster <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                     x = ct_gene_df$cluster, 
+                                     perl = TRUE)
+    cell_types <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                     x = cell_types, 
+                                     perl = TRUE)
+    ct <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                     x = ct, 
+                                     perl = TRUE)
+    
+    gene <- ct_gene_df[ct_gene_df$cluster == ct, "gene"]
+    print(gene)
+    tmp_plt <- spanielPlot(object = st_se,
+            grob = st_se@images[[1]],
+            plotType = "Gene",
+            gene = gene,
+            ptSizeMax = 2, 
+            ptSizeMin = 0,
+            customTitle = sprintf("%s; Expression of: %s", sample_dict[[geo]], gene)) +
+      theme_classic() +
+      theme(
+        plot.title = element_text(hjust = 0.5, size = 10),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank()
+        )
+
+  })
+  
+  
+  # Plot cell type proportions
+  rownames(decon_mtrx_prop) <- rownames(st_se@meta.data)
+  colnames(decon_mtrx_prop) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                     x = colnames(decon_mtrx_prop), 
+                                     perl = TRUE)
+  st_se@assays$RNA@scale.data <- t(decon_mtrx_prop)
+  st_se@assays$RNA@data <- t(decon_mtrx_prop)
+  
+  ct_plt <- lapply(cell_types, function(ct){
+    ct <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                 x = ct, 
+                                 perl = TRUE)
+    print(ct)
+
+    tmp_plt <- spanielPlot(object = st_se, 
+            grob = st_se@images[[1]],
+            plotType = "Gene",
+            gene = ct,
+            ptSizeMax = 0.5, 
+            ptSizeMin = 0,
+            customTitle = sprintf("%s; Proportion of cell type: %s", 
+                                  sample_dict[[geo]], df_plt_names[df_plt_names$df_name == ct, "plt_name"])) +
+      # geom_point(aes(alpha = ct)) +
+      theme_classic() +
+      theme(
+        plot.title = element_text(hjust = 0.5, size = 10),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank()
+        ) +
+      scale_color_gradientn(colours = heat.colors(10, rev = TRUE),
+                           limits = c(0, 1), name = "Proportion") +
+      scale_size_continuous(limits = c(0, 1), name = "Proportion")
+    
+    return(tmp_plt)
+  })
+  
+  # Plot each cell type with its marker gene
+  lapply(seq_len(length(gene_plt)), function(i) {
+    arr_plt <- cowplot::plot_grid(plotlist = list(gene_plt[[i]], ct_plt[[i]]),
+                      ncol = 2, 
+                      nrow = 1) +   
+      theme(plot.background = element_rect(fill = NA, color = "black", size = 2),
+        panel.background = element_blank(),
+        plot.margin = margin(10, 10, 10, 10))
+
+    ## Rounded edges
+    g <- ggplotGrob(arr_plt)
+    bg <- g$grobs[[1]]
+    round_bg <- grid::roundrectGrob(x=bg$x, y=bg$y, width=bg$width, height=bg$height,
+                              r=unit(0.1, "snpc"),
+                              just=bg$just, name=bg$name, gp=bg$gp, vp=bg$vp)
+    g$grobs[[1]] <- round_bg
+    g_plt <- cowplot::plot_grid(g) + theme(plot.margin = margin(10, 10, 10, 10))
+    return(g_plt)
+
+  }) %>% 
+  ggpubr::ggexport(plotlist = ., 
+                   filename = sprintf("%s/%s/%s_spatial_deconv_sp_%s_%s.pdf", an_pdac, plt_dir, geo, id_comp, id_nmf),
+                   height = 9, 
+                   width = 18, 
+                   ncol = 2, 
+                   nrow = 2)
+
+})
+```
+
+### PDAC-B
+#### scRNAseq Downsampling + Data preprocessing
+```{r}
+#### Extract the top marker genes from each cluster ####
+Seurat::Idents(object = indrop_pdac_b) <- indrop_pdac_b@meta.data[, clust_vr]
+cluster_markers_b <- Seurat::FindAllMarkers(object = indrop_pdac_b,
+                                              verbose = TRUE,
+                                              only.pos = TRUE,
+                                              assay = "SCT",
+                                              slot = "data")
+
+# cluster_markers_all <- readRDS(file = sprintf("%s/%s/cluster_markers_%s_paula_specific.RDS",
+#                        an_mouse, robj_dir, id_comp))
+
+cluster_markers_filt_b <- cluster_markers_b %>%
+  filter(avg_logFC > 1 & pct.1 > 0.75)
+
+cluster_markers_filt_b$cluster <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                     x = cluster_markers_filt_b$cluster, 
+                                     perl = TRUE)
+
+```
+
+#### Train NMF model
+```{r}
+nmf_b_ls <- lapply(st_b_list, function(st_se) {
+  print(st_se)
+  nmf_mod_ls <- train_nmf(cluster_markers = cluster_markers_filt_b,
+                        se_sc = indrop_pdac_b_down,
+                        mtrx_spatial = st_se@assays$RNA@counts,
+                        ntop = NULL,
+                        transf = transf,
+                        clust_vr = clust_vr,
+                        method = method)
+})
+
+saveRDS(object = nmf_b_ls,
+        file = sprintf("%s/data/paired_indrop_specific_nmf_ls_%s_%s_B.RDS", 
+                       an_pdac, id_comp, id_nmf))
+
+# nmf_b_ls <- readRDS(file = "analysis/pancreas_PDAC/data/pancreas_specific_nmf_ls_100.RDS")
+names(nmf_b_ls) <- names(st_b_list)
+```
+
+```{r eval = FALSE}
+dot_plot_profiles_fun(h = coef(nmf_b_ls[[2]][[1]]),
+                      train_cell_clust = nmf_b_ls[[2]][[2]], 
+                      clust_vr = clust_vr)
+```
+
+#### Deconvolution
+```{r}
+decon_b_ls <- lapply(names(nmf_b_ls), function(geo){
+  nmf_mod_ls <- nmf_b_ls[[geo]]
+  nmf_mod <- nmf_mod_ls[[1]]
+  # get matrix W
+  w <- basis(nmf_mod)
+  dim(w)
+  
+  # get matrix H
+  h <- coef(nmf_mod)
+  dim(h)
+  
+  # Extract count matrix
+  spot_counts <- st_b_list[[geo]]@assays$RNA@counts
+  
+  # Subset to genes used to train the model
+  spot_counts <- spot_counts[rownames(spot_counts) %in% rownames(w), ]
+  ct_topic_profiles <- topic_profile_per_cluster_nmf(h = h,
+                              train_cell_clust = nmf_mod_ls[[2]],
+                              clust_vr = clust_vr)
+
+  decon_mtrx <- mixture_deconvolution_nmf(nmf_mod = nmf_mod,
+                            mixture_transcriptome = spot_counts,
+                            transf = transf,
+                            reference_profiles = ct_topic_profiles, 
+                            min_cont = 0.001)
+  return(decon_mtrx)
+
+})
+saveRDS(object = decon_b_ls,
+        file = sprintf("%s/data/paired_indrop_specific_decon_ls_%s_%s_B.RDS", 
+                       an_pdac, id_comp, id_nmf))
+
+names(decon_b_ls) <- names(st_b_list)
+```
+
+### Visualization
+Create a dictionary with equivalence cell type and its gene marker
+```{r}
+common_names_b <-  purrr::reduce(lapply(st_b_list, row.names), intersect)
+
+ct_gene_df_b <- lapply(unique(cluster_markers_b$cluster), function(clust) {
+  ls1 <- cluster_markers_b[cluster_markers_b$cluster == clust, "gene"]
+  ls2 <- cluster_markers_b[cluster_markers_b$cluster != clust, "gene"]
+  ls1_unique <- ls1[! ls1 %in% ls2]
+
+  return(cluster_markers_b[cluster_markers_b$cluster == clust & cluster_markers_b$gene %in% ls1_unique, ])
+}) %>%
+  bind_rows() %>%
+  filter(gene %in% common_names_b) %>% 
+  arrange(cluster, p_val) %>% 
+  group_by(cluster) %>% 
+  top_n(1) %>% 
+  data.frame()
+```
+
+#### Spatial location
+dataframe with plot names
+```{r}
+decon_mtrx <- decon_b_ls[[1]]
+cell_types <- colnames(decon_mtrx)[! colnames(decon_mtrx) %in% "res_ss"]
+cell_types <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                 x = cell_types, 
+                                 perl = TRUE)
+
+plt_names <- sort(unique(indrop_pdac_b@meta.data[, clust_vr]))
+
+df_plt_names <- data.frame(df_name = cell_types, 
+                           plt_name = plt_names)
+
+```
+
+Plot gene + cell type expression/location respectively
+```{r}
+sapply(names(decon_b_ls), USE.NAMES = TRUE, function(geo) {
+  print(geo)
+  decon_mtrx <- decon_b_ls[[geo]]
+  cell_types <- colnames(decon_mtrx)[! colnames(decon_mtrx) %in% "res_ss"]
+  decon_mtrx_prop <- round(decon_mtrx[, cell_types] / rowSums(decon_mtrx[, cell_types]), 4)
+  st_se <- st_b_list[[geo]]
+  
+  ### 1st plot the marker gene for that cell type
+  gene_plt <- lapply(cell_types, function(ct) {
+    ct_gene_df_b$cluster <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                     x = ct_gene_df_b$cluster, 
+                                     perl = TRUE)
+    cell_types <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                     x = cell_types, 
+                                     perl = TRUE)
+    ct <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                     x = ct, 
+                                     perl = TRUE)
+    
+    gene <- ct_gene_df_b[ct_gene_df_b$cluster == ct, "gene"]
+
+    tmp_plt <- spanielPlot(object = st_se, 
+            grob = st_se@images[[1]],
+            plotType = "Gene",
+            gene = gene,
+            ptSizeMax = 5, 
+            ptSizeMin = 0,
+            customTitle = sprintf("%s; Expression of: %s", sample_dict[[geo]], gene)) +
+      theme_classic() +
+      theme(
+        plot.title = element_text(hjust = 0.5, size = 10),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank()
+        )
+
+  })
+  
+  
+  # Plot cell type proportions
+  rownames(decon_mtrx_prop) <- rownames(st_se@meta.data)
+  colnames(decon_mtrx_prop) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                     x = colnames(decon_mtrx_prop), 
+                                     perl = TRUE)
+  st_se@assays$RNA@scale.data <- t(decon_mtrx_prop)
+  st_se@assays$RNA@data <- t(decon_mtrx_prop)
+  
+  ct_plt <- lapply(cell_types, function(ct){
+    ct <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                 x = ct, 
+                                 perl = TRUE)
+    print(ct)
+
+    tmp_plt <- spanielPlot(object = st_se, 
+            grob = st_se@images[[1]],
+            plotType = "Gene",
+            gene = ct,
+            ptSizeMax = 10, 
+            ptSizeMin = 0,
+            customTitle = sprintf("%s; Proportion of cell type: %s", 
+                                  sample_dict[[geo]], df_plt_names[df_plt_names$df_name == ct, "plt_name"])) +
+      # geom_point(aes(alpha = ct)) +
+      theme_classic() +
+      theme(
+        plot.title = element_text(hjust = 0.5, size = 10),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank()
+        ) +
+      scale_color_gradientn(colours = colorRamps::matlab.like2(10),
+                           limits = c(0, 1), name = "Proportion") +
+      scale_size_continuous(limits = c(0, 1), name = "Proportion")
+    
+    return(tmp_plt)
+  })
+  
+  # Plot each cell type with its marker gene
+  lapply(seq_len(length(gene_plt)), function(i) {
+    arr_plt <- cowplot::plot_grid(plotlist = list(gene_plt[[i]], ct_plt[[i]]),
+                      ncol = 2, 
+                      nrow = 1) +   
+      theme(plot.background = element_rect(fill = NA, color = "black", size = 2),
+        panel.background = element_blank(),
+        plot.margin = margin(10, 10, 10, 10))
+
+    ## Rounded edges
+    g <- ggplotGrob(arr_plt)
+    bg <- g$grobs[[1]]
+    round_bg <- grid::roundrectGrob(x=bg$x, y=bg$y, width=bg$width, height=bg$height,
+                              r=unit(0.1, "snpc"),
+                              just=bg$just, name=bg$name, gp=bg$gp, vp=bg$vp)
+    g$grobs[[1]] <- round_bg
+    g_plt <- cowplot::plot_grid(g) + theme(plot.margin = margin(10, 10, 10, 10))
+    return(g_plt)
+
+  }) %>% 
+  ggpubr::ggexport(plotlist = ., 
+                   filename = sprintf("%s/%s/%s_spatial_deconv_sp_%s_%s.pdf", an_pdac, plt_dir, geo, id_comp, id_nmf),
+                   height = 9, 
+                   width = 18, 
+                   ncol = 2, 
+                   nrow = 2)
+
+})
+```

@@ -1,0 +1,329 @@
+---
+title: "PDAC paired Piecharts"
+author: "Marc Elosua-Bayes"
+date: "5/11/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+In this Rmarkdown document we are going to plot the piecharts of the cell type proportions for each capture location with the paired dataset.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(NMF)
+library(purrr)
+library(tibble)
+library(ggplot2)
+library(Matrix)
+library(Seurat)
+library(Spaniel)
+library(SPOTlight)
+library(flextable)
+library(cowplot)
+library(ggpubr)
+source("utils/bin.r")
+```
+
+Paths
+```{r}
+tech <- "indrop"
+tissue <- "pdac_itai_2"
+dwn_smplng <- "both"
+org <- "hs"
+source("misc/paths_vrs.R")
+dir.create(path = sprintf("%s/%s", an_pdac, plt_dir), showWarnings = FALSE, recursive = TRUE)
+dir.create(path = sprintf("%s/%s", an_pdac, robj_dir), showWarnings = FALSE, recursive = TRUE)
+```
+
+Set parameters and IDs
+```{r}
+clust_vr <- "annotation"
+cl_n <- 100
+method <- "nsNMF"
+transf <- "uv"
+hvg <- 3000
+FC <- 1
+pct1 <- 0.9
+
+id_nmf <- sprintf("cln-%s_transf-%s_method-%s_hvg-%s_FC-%s_pct1-%s", 
+                  cl_n, transf, method, hvg, FC, pct1)
+data_dir <- "data/MusMusculus/allen_reference"
+options(stringsAsFactors = FALSE)
+
+
+library(RColorBrewer)
+n <- 60
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector  <-  unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+```
+
+Sample dictionary
+```{r}
+sample_dict <- list()
+sample_dict[["GSM3036911"]] = "PDAC-A ST1"
+sample_dict[["GSM4100721"]] = "PDAC-A ST2"
+sample_dict[["GSM4100722"]] = "PDAC-A ST3"
+sample_dict[["GSM3405534"]] = "PDAC-B ST1"
+sample_dict[["GSM4100723"]] = "PDAC-B ST2"
+sample_dict[["GSM4100724"]] = "PDAC-B ST3"
+
+pdac_a_smpl <- c("GSM3036911", "GSM4100721", "GSM4100722")
+pdac_b_smpl <- c("GSM3405534", "GSM4100723", "GSM4100724")
+```
+
+## Load data
+
+### scRNAseq
+```{r}
+# indrop_pdac_a <- readRDS(file = "analysis/pancreas_PDAC/data/pdac_A_annot.rds")
+# indrop_pdac_b <- readRDS(file = "analysis/pancreas_PDAC/data/pdac_B_annot.rds")
+indrop_pdac_a <- readRDS(file = "analysis/pancreas_PDAC/data/PDAC-A_itai_processed.RDS")
+indrop_pdac_b <- readRDS(file = "analysis/pancreas_PDAC/data/PDAC-B_itai_processed.RDS")
+```
+
+### Spatial data
+```{r}
+sample_pdac <- c(pdac_a_smpl, pdac_b_smpl)
+
+st_list <- sapply(sample_pdac, USE.NAMES = TRUE, function(geo) {
+  print(geo)
+  sample <- stringr::str_split(string = sample_dict[[geo]], pattern = " ")[[1]][1]
+  geo_path <- sprintf("analysis/pancreas_PDAC/data/%s/%s", sample, geo)
+  st_tibble <- readr::read_tsv(file = sprintf("%s/filtered_feature_bc_matrix.tsv", geo_path), 
+                            col_names = TRUE) %>%
+    tibble::column_to_rownames("X1")
+  
+  st_se <- Spaniel::createSeurat(counts = st_tibble, 
+               barcodeFile = sprintf("%s/spatial/tissue_positions_list_spatial_object.tsv", geo_path), 
+               projectName = "PDAC-B",
+               sectionNumber = "1")
+  st_se <- Seurat::ScaleData(st_se)
+
+  ### Load histological image into R
+  fn_image <- list.files(path = sprintf("%s/spatial", geo_path), pattern = "lowres_rot.jpg$")[1]
+  imgFile <- sprintf("%s/spatial/%s", geo_path, fn_image)
+  image <- Spaniel::parseImage(imgFile)
+  st_se@images <- list(image)
+  
+  st_se$slice <- sample_dict[[geo]]
+  return(list(st_se))
+})
+```
+
+### Deconvolution matrices
+```{r}
+decon_mtrx_dir <- sprintf("%s/%s", an_pdac, robj_dir)
+decon_fn_ls <- list.files(path = decon_mtrx_dir,
+                       pattern = "^decon_mtrx_paired")
+
+paired_decon_mtrx_ls <- lapply(decon_fn_ls, function(fn) {
+  path_str <- paste(decon_mtrx_dir, fn, sep = "/")
+  decon_mtrx <- readRDS(file = path_str)
+  return(decon_mtrx)
+})
+
+names_ls <- sapply(decon_fn_ls, USE.NAMES = FALSE, function(i) stringr::str_split(string = i, pattern = "_")[[1]][4])
+
+names(paired_decon_mtrx_ls) <- names_ls
+```
+
+
+### Spatial scatterpie plots
+```{r}
+qual_col_pals <- brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector  <-  unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+
+cell_types <- sort(unique(c(as.character(indrop_pdac_a$annotation), as.character(indrop_pdac_b$annotation))))
+# colourCount <- length(unique(indrop_pdac_a$annotation))
+# getPalette <- colorRampPalette(brewer.pal(8, "Paired"))
+
+plt_df <- data.frame(plt_name = cell_types,
+                     df_name = gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
+                                    x = cell_types,
+                                    perl = TRUE),
+                     col_ct = col_vector[1:length(cell_types)])
+```
+
+```{r}
+scatterpie_arrange_plt <- lapply(sample_pdac, function(geo) {
+  st_se <- st_list[[geo]]
+  decon_mtrx <- paired_decon_mtrx_ls[[geo]]
+  decon_mtrx_subs <- decon_mtrx[, colnames(decon_mtrx)[! colnames(decon_mtrx) %in% "res_ss"]]
+  colnames(decon_mtrx_subs) <- gsub(pattern = "[[:punct:]]|[[:blank:]]",
+                         replacement = ".",
+                         x = colnames(decon_mtrx_subs),
+                         perl = TRUE)
+
+  st_se@meta.data <- cbind(st_se@meta.data, decon_mtrx_subs)
+  ## Preprocess data
+  spatial_coord <- data.frame(st_se@meta.data) %>%
+    tibble::rownames_to_column("ID")
+  
+  # Set right plot names
+  tmp_df <- data.frame(df_name = colnames(spatial_coord)[colnames(spatial_coord) %in% plt_df$df_name]) %>% 
+    left_join(plt_df)
+  ind <- which(names(spatial_coord) %in% tmp_df$df_name)
+  names(spatial_coord)[ind] <- tmp_df$plt_name
+  
+  # Get list of all present cell types
+  ct_all <- names(spatial_coord)[names(spatial_coord) %in% tmp_df$plt_name]
+  ind_rm <- which(colSums(spatial_coord[, ct_all] > 0) == 0)
+  if (length(ind_rm) > 0) {
+    ct_all <- ct_all[-ind_rm]
+  }
+  
+  # Plot the scatterplot
+  scatterpie_plt <- ggplot() +
+                     scatterpie::geom_scatterpie(data = spatial_coord,
+                                                 aes(x = x,
+                                                     y = y),
+                                                 cols = ct_all,
+                                                 color = NA,
+                                                 alpha = 1, 
+                                                 pie_scale = 0.9) +
+                     scale_y_reverse() +
+                     theme_half_open(11, rel_small = 1) +
+                     theme_void() + 
+                     coord_fixed(ratio = 1) +
+                     scale_fill_manual(values = tmp_df[tmp_df$plt_name %in% ct_all, "col_ct"]) +
+                     labs(title = sprintf("%s Spatial scatterpie", geo),
+                          color = "Cell types") +
+                     theme(
+                       # plot.background = element_rect(fill = "#FFFFFF"),
+                       # panel.background = element_blank(),
+                       # plot.margin = margin(20, 20, 20, 20),
+                       plot.title = element_text(hjust = 0.5, size = 20))
+                     
+  # tmp_grob <- round_corners_grob(plt = scatterpie_plt)
+  # tmp_plt <- ggdraw(tmp_grob)
+
+  return(scatterpie_plt)
+}) %>% 
+  cowplot::plot_grid(plotlist = .,
+                    ncol = 3,
+                    nrow = 2,
+                    align = "vh", 
+                   axis = "trbl")
+
+ggpubr::ggexport(scatterpie_arrange_plt,
+                 filename = sprintf("%s/%s/Supplementary_Figure_GGG_scatterpie_arrangement_paired.pdf",
+                                    an_pdac, plt_dir),
+                 width = 24,
+                 height = 18,
+                 res = 600)
+
+# ggpubr::ggexport(scatterpie_plt,
+#                  filename = sprintf("%s/%s/Supplementary_Figure_GGG_scatterpie_arrangement_paired_GSM3036911.jpeg",
+#                                     an_pdac, plt_dir),
+#                  width = 6000,
+#                  height = 4000,
+#                  res = 400)
+
+```
+
+
+Including the image side by side
+```{r eval = FALSE}
+scatterpie_arrange_plt <- lapply(sample_pdac, function(geo) {
+  st_se <- st_list[[geo]]
+  decon_mtrx <- paired_decon_mtrx_ls[[geo]]
+  decon_mtrx_subs <- decon_mtrx[, colnames(decon_mtrx)[! colnames(decon_mtrx) %in% "res_ss"]]
+  colnames(decon_mtrx_subs) <- gsub(pattern = "[[:punct:]]|[[:blank:]]",
+                         replacement = ".",
+                         x = colnames(decon_mtrx_subs),
+                         perl = TRUE)
+
+  st_se@meta.data <- cbind(st_se@meta.data, decon_mtrx_subs)
+  ## Preprocess data
+  spatial_coord <- data.frame(st_se@meta.data) %>%
+    tibble::rownames_to_column("ID")
+  
+  # Set right plot names
+  tmp_df <- data.frame(ct_name = colnames(spatial_coord)[colnames(spatial_coord) %in% plt_df$ct_name]) %>% 
+    left_join(plt_df)
+  ind <- which(names(spatial_coord) %in% tmp_df$ct_name)
+  names(spatial_coord)[ind] <- tmp_df$plt_name
+  
+  # Get list of all present cell types
+  ct_all <- names(spatial_coord)[names(spatial_coord) %in% tmp_df$plt_name]
+  ind_rm <- which(colSums(spatial_coord[, ct_all] > 0) == 0)
+  if (length(ind_rm) > 0) {
+    ct_all <- ct_all[-ind_rm]
+  }
+  
+  # Plot the scatterplot
+  scatterpie_plt <- ggplot() +
+                     scatterpie::geom_scatterpie(data = spatial_coord,
+                                                 aes(x = x,
+                                                     y = y),
+                                                 cols = ct_all,
+                                                 color = NA,
+                                                 alpha = 1, 
+                                                 pie_scale = 1) +
+                     scale_y_reverse() +
+                     theme_half_open(11, rel_small = 1) +
+                     theme_void() + 
+                     coord_fixed(ratio = 1) +
+                     scale_fill_manual(values = tmp_df[tmp_df$plt_name %in% ct_all, "color_associated"]) +
+                     theme(
+                       # plot.background = element_rect(fill = "#FFFFFF"),
+                       # panel.background = element_blank(),
+                       # plot.margin = margin(20, 20, 20, 20),
+                       plot.title = element_text(hjust = 0.5, size = 20))
+  
+  ## Plot image
+  sample <- stringr::str_split(string = sample_dict[[geo]], pattern = " ")[[1]][1]
+  geo_path <- sprintf("analysis/pancreas_PDAC/data/%s/%s", sample, geo)
+  fn_image <- list.files(path = sprintf("%s/spatial", geo_path), pattern = "lowres_rot.jpg$")[1]
+  imgFile <- sprintf("%s/spatial/%s", geo_path, fn_image)
+
+  img_plt <- plot_image(img_path = imgFile)
+  
+  tmp_plt <- cowplot::plot_grid(scatterpie_plt, img_plt,
+                    ncol = 2,
+                    nrow = 1,
+                    align = "vh", 
+                   axis = "trbl")
+  
+  # now add the title
+  title <- ggdraw() + 
+    draw_label(
+      sprintf("%s Spatial scatterpie", geo),
+      fontface = 'bold',
+      x = 0,
+      hjust = 0
+    ) +
+    theme(
+      # add margin on the left of the drawing canvas,
+      # so title is aligned with left edge of first plot
+      plot.margin = margin(0, 0, 0, 7)
+    )
+  plot_grid(
+    title, tmp_plt,
+    ncol = 1,
+    # rel_heights values control vertical title margins
+    rel_heights = c(0.1, 1)
+  )
+  # tmp_grob <- round_corners_grob(plt = scatterpie_plt)
+  # tmp_plt <- ggdraw(tmp_grob)
+
+  return(tmp_plt)
+}) %>% 
+  cowplot::plot_grid(plotlist = .,
+                    ncol = 3,
+                    nrow = 2,
+                    align = "vh", 
+                   axis = "trbl")
+
+ggpubr::ggexport(scatterpie_arrange_plt,
+                 filename = sprintf("%s/%s/Supplementary_Figure_GGG_scatterpie_arrangement_img.pdf",
+                                    an_pdac, plt_dir),
+                 width = 24,
+                 height = 12,
+                 res = 600)
+```

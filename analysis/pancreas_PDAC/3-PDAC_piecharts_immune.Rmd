@@ -1,0 +1,267 @@
+---
+title: "PDAC piecharts ICA"
+author: "Marc Elosua-Bayes"
+date: "5/18/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+## Libraries
+```{r}
+library(NMF)
+library(nnls)
+library(dplyr)
+library(ggplot2)
+library(purrr)
+library(Seurat)
+library(SPOTlight)
+library(edgeR)
+library(Spaniel)
+source("utils/spatial_plot_spaniel.R")
+```
+
+Paths
+```{r}
+#### Setting vrs ####
+tech <- "sc"
+tissue <- "pdac_unpaired"
+dwn_smplng <- "both"
+org <- "hs"
+source("misc/paths_vrs.R")
+
+clust_vr <- "cell_type_specific"
+cl_n <- 100
+method <- "nsNMF"
+transf <- "uv"
+hvg <- 3000
+ntop <- NULL
+FC <- "all"
+pct1 <- "all"
+
+id_nmf <- sprintf("cln-%s_transf-%s_method-%s_hvg-%s_FC-%s_pct1-%s", 
+                  cl_n, transf, method, hvg, FC, pct1)
+
+
+library(RColorBrewer)
+n <- 60
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector  <-  unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+
+dir.create(path = sprintf("%s/%s", an_pdac, plt_dir), showWarnings = FALSE, recursive = TRUE)
+dir.create(path = sprintf("%s/%s", an_pdac, robj_dir), showWarnings = FALSE, recursive = TRUE)
+```
+
+Set parameters and IDs
+```{r}
+data_dir <- "data/MusMusculus/allen_reference"
+options(stringsAsFactors = FALSE)
+
+
+library(RColorBrewer)
+n <- 60
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector  <-  unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+```
+
+
+## Load data
+## Parameters
+```{r}
+#### Setting vrs ####
+tech <- "sc"
+tissue <- "pdac"
+dwn_smplng <- "both"
+org <- "hs"
+source("misc/paths_vrs.R")
+
+clust_vr <- "cell_type_specific"
+cl_n <- 100
+method <- "nsNMF"
+transf <- "uv"
+hvg <- 3000
+FC <- 1
+pct1 <- 0.9
+
+id_nmf <- sprintf("cln-%s_transf-%s_method-%s_hvg-%s_FC-%s_pct1-%s", 
+                  cl_n, transf, method, hvg, FC, pct1)
+
+# sample dictionary
+sample_dict <- list()
+sample_dict[["GSM3036911"]] = "PDAC-A ST1"
+sample_dict[["GSM3405534"]] = "PDAC-B ST1"
+sample_dict[["GSM4100721"]] = "PDAC-A ST2"
+sample_dict[["GSM4100722"]] = "PDAC-A ST3"
+sample_dict[["GSM4100723"]] = "PDAC-B ST2"
+sample_dict[["GSM4100724"]] = "PDAC-B ST3"
+
+pdac_a_smpl <- c("GSM3036911", "GSM4100721", "GSM4100722")
+pdac_b_smpl <- c("GSM3405534", "GSM4100723", "GSM4100724")
+sample_pdac <- c(pdac_a_smpl, pdac_b_smpl)
+
+```
+
+## Load data
+```{r}
+# general_markers <- readRDS("data/immune_cancer_atlas/Atlas_general_markers_150.rds")
+specific_markers <- readRDS("data/immune_cancer_atlas/Atlas_specific_markers_150.rds")
+ica_se <- readRDS("data/immune_cancer_atlas/pancreas_new_celltypes_100.rds")
+ica_se <- ica_se[, !ica_se$specific_cell_type %in% c("Macro_2", "Macro_3")]
+```
+
+Set color vector
+```{r}
+colourCount <- length(unique(ica_se$specific_cell_type))
+getPalette <- colorRampPalette(brewer.pal(8, "Dark2"))
+```
+
+### Spatial transcriptomics
+This data comes from the paper [Integrating microarray-based spatial transcriptomics and single-cell RNA-seq reveals tissue architecture in pancreatic ductal adenocarcinomas](https://www.nature.com/articles/s41587-019-0392-8)
+It can be accessed under GEO accession number GSE111672.
+
+```{r}
+sample_geo <- c("GSM3036911", "GSM3405534", "GSM4100721", "GSM4100722",
+                "GSM4100723", "GSM4100724")
+
+st_list <- sapply(sample_geo, USE.NAMES = TRUE, function(geo) {
+  print(geo)
+  sample <- stringr::str_split(string = sample_dict[[geo]], pattern = " ")[[1]][1]
+  geo_path <- sprintf("analysis/pancreas_PDAC/data/%s/%s", sample, geo)
+  st_tibble <- readr::read_tsv(file = sprintf("%s/filtered_feature_bc_matrix.tsv", geo_path), 
+                            col_names = TRUE) %>%
+    tibble::column_to_rownames("X1")
+  
+  st_se <- Spaniel::createSeurat(counts = st_tibble, 
+               barcodeFile = sprintf("%s/spatial/tissue_positions_list_spatial_object.tsv", geo_path), 
+               projectName = "PDAC-B",
+               sectionNumber = "1")
+  st_se <- Seurat::SCTransform(st_se)
+
+  ### Load histological image into R
+  fn_image <- list.files(path = sprintf("%s/spatial", geo_path), pattern = "lowres_rot.jpg$")[1]
+  imgFile <- sprintf("%s/spatial/%s", geo_path, fn_image)
+  image <- Spaniel::parseImage(imgFile)
+  st_se@images <- list(image)
+  
+  st_se$slice <- sample_dict[[geo]]
+  return(list(st_se))
+})
+```
+
+### Deconvolution matrices
+```{r}
+decon_mtrx_dir <- sprintf("%s/%s", an_pdac, robj_dir)
+decon_fn_ls <- list.files(path = decon_mtrx_dir,
+                       pattern = "^decon_mtrx_ica-integration_specific")[1:6]
+
+
+
+immune_decon_mtrx_ls <- lapply(decon_fn_ls, function(fn) {
+  path_str <- paste(decon_mtrx_dir, fn, sep = "/")
+  decon_mtrx <- readRDS(file = path_str)
+  return(decon_mtrx)
+})
+
+names_ls <- sapply(decon_fn_ls, USE.NAMES = FALSE, function(i) stringr::str_split(string = i, pattern = "_")[[1]][5])
+
+names(immune_decon_mtrx_ls) <- names_ls
+```
+
+dataframe with plot names
+```{r}
+cell_types_plt <- sort(unique(ica_se$specific_cell_type))
+
+pdac_plt_names <- data.frame(df_name = gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
+                                            x = cell_types_plt,
+                                            perl = TRUE), 
+                           plt_name = cell_types_plt,
+                           col_ct = col_vector[seq_len(length(cell_types_plt))])
+```
+
+## Scatterpie plots
+```{r}
+scatterpie_arrange_plt <- lapply(sample_pdac, function(geo) {
+  st_se <- st_list[[geo]]
+  decon_mtrx <- immune_decon_mtrx_ls[[geo]]
+  decon_mtrx_subs <- decon_mtrx[, colnames(decon_mtrx)[! colnames(decon_mtrx) %in% "res_ss"]]
+  colnames(decon_mtrx_subs) <- gsub(pattern = "[[:punct:]]|[[:blank:]]",
+                         replacement = ".",
+                         x = colnames(decon_mtrx_subs),
+                         perl = TRUE)
+
+  st_se@meta.data <- cbind(st_se@meta.data, decon_mtrx_subs)
+  ## Preprocess data
+  spatial_coord <- data.frame(st_se@meta.data) %>%
+    tibble::rownames_to_column("ID")
+  
+  # Set right plot names
+  tmp_df <- data.frame(df_name = colnames(spatial_coord)[colnames(spatial_coord) %in% pdac_plt_names$df_name]) %>% 
+    left_join(pdac_plt_names)
+  ind <- which(names(spatial_coord) %in% tmp_df$df_name)
+  names(spatial_coord)[ind] <- as.character(tmp_df$plt_name)
+  
+  # Get list of all present cell types
+  ct_all <- names(spatial_coord)[names(spatial_coord) %in% as.character(tmp_df$plt_name)]
+  ind_rm <- which(colSums(spatial_coord[, ct_all] > 0) == 0)
+  if (length(ind_rm) > 0) {
+    ct_all <- ct_all[-ind_rm]
+  }
+  
+  # Plot the scatterplot
+  scatterpie_plt <- ggplot2::ggplot() +
+                     scatterpie::geom_scatterpie(data = spatial_coord,
+                                                 aes(x = x,
+                                                     y = y),
+                                                 cols = ct_all,
+                                                 color = NA,
+                                                 alpha = 1, 
+                                                 pie_scale = 0.9) +
+                     ggplot2::scale_y_reverse() +
+                     cowplot::theme_half_open(11, rel_small = 1) +
+                     ggplot2::theme_void() + 
+                     ggplot2::coord_fixed(ratio = 1) +
+                     # ggplot2::scale_fill_manual(values = tmp_df[tmp_df$plt_name %in% ct_all, "col_ct"]) +
+                     ggplot2::scale_fill_manual(values = getPalette(colourCount)) +
+                     ggplot2::labs(title = sprintf("%s Spatial scatterpie", geo)) +
+                     ggplot2::theme(
+                       # plot.background = element_rect(fill = "#FFFFFF"),
+                       # panel.background = element_blank(),
+                       # plot.margin = margin(20, 20, 20, 20),
+                       plot.title = ggplot2::element_text(hjust = 0.5, size = 20)) +
+                     ggplot2::guides(fill = guide_legend(ncol = 1))
+                     
+
+  return(scatterpie_plt)
+}) %>% 
+  cowplot::plot_grid(plotlist = .,
+                    ncol = 3,
+                    nrow = 2,
+                    align = "vh", 
+                   axis = "trbl")
+
+ggpubr::ggexport(scatterpie_arrange_plt,
+                 filename = sprintf("%s/%s/Supplementary_Figure_GGG_scatterpie_arrangement_immune.pdf",
+                                    an_pdac, plt_dir),
+                 width = 24,
+                 height = 18,
+                 res = 600)
+
+
+# ggpubr::ggexport(scatterpie_plt,
+#                  filename = sprintf("%s/%s/Supplementary_Figure_GGG_scatterpie_arrangement_immune_GSM3036911.jpeg",
+#                                     an_pdac, plt_dir),
+#                  width = 6000,
+#                  height = 4000,
+#                  res = 400)
+
+```

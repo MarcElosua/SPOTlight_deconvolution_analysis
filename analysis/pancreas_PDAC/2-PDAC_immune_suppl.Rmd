@@ -1,0 +1,746 @@
+---
+title: "PDAC + ICA immune cells"
+author: "Marc Elosua-Bayes"
+date: "5/14/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+## Libraries
+```{r}
+library(NMF)
+library(nnls)
+library(dplyr)
+library(ggplot2)
+library(purrr)
+library(Seurat)
+library(SPOTlight)
+library(edgeR)
+library(flextable)
+library(Spaniel)
+source("utils/spatial_plot_spaniel.R")
+```
+
+Paths
+```{r}
+#### Setting vrs ####
+tech <- "sc"
+tissue <- "pdac_unpaired"
+dwn_smplng <- "both"
+org <- "hs"
+source("misc/paths_vrs.R")
+
+clust_vr <- "cell_type_specific"
+cl_n <- 100
+method <- "nsNMF"
+transf <- "uv"
+hvg <- 3000
+ntop <- NULL
+FC <- "all"
+pct1 <- "all"
+
+id_nmf <- sprintf("cln-%s_transf-%s_method-%s_hvg-%s_FC-%s_pct1-%s", 
+                  cl_n, transf, method, hvg, FC, pct1)
+
+dir.create(path = sprintf("%s/%s", an_pdac, plt_dir), showWarnings = FALSE, recursive = TRUE)
+dir.create(path = sprintf("%s/%s", an_pdac, robj_dir), showWarnings = FALSE, recursive = TRUE)
+```
+
+Color palette to use
+```{r}
+library(RColorBrewer)
+n <- 60
+qual_col_pals <- brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector  <-  unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+```
+
+```{r}
+# sample dictionary
+sample_dict <- list()
+sample_dict[["GSM3036911"]] = "PDAC-A ST1"
+sample_dict[["GSM3405534"]] = "PDAC-B ST1"
+sample_dict[["GSM4100721"]] = "PDAC-A ST2"
+sample_dict[["GSM4100722"]] = "PDAC-A ST3"
+sample_dict[["GSM4100723"]] = "PDAC-B ST2"
+sample_dict[["GSM4100724"]] = "PDAC-B ST3"
+
+pdac_a_smpl <- c("GSM3036911", "GSM4100721", "GSM4100722")
+pdac_b_smpl <- c("GSM3405534", "GSM4100723", "GSM4100724")
+sample_pdac <- c(pdac_a_smpl, pdac_b_smpl)
+
+```
+
+## Load data
+```{r}
+# general_markers <- readRDS("data/immune_cancer_atlas/Atlas_general_markers_150.rds")
+specific_markers <- readRDS("data/immune_cancer_atlas/Atlas_specific_markers_150.rds")
+ica_se <- readRDS("data/immune_cancer_atlas/pancreas_new_celltypes_100.rds")
+ica_se <- ica_se[, !ica_se$specific_cell_type %in% c("Macro_2", "Macro_3")]
+
+```
+
+Make dataframes from the list to initiliaze the matrix
+```{r}
+# general_markers_df <- lapply(names(general_markers), function(ct) {
+#   tmp_df <- data.frame(cluster = ct,
+#                        gene = general_markers[[ct]],
+#                        p_val = 0)
+#   return(tmp_df)
+# }) %>% dplyr::bind_rows()
+# 
+# general_markers_df$cluster <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+#                                      x = general_markers_df$cluster, 
+#                                      perl = TRUE)
+
+specific_markers_df <- lapply(names(specific_markers), function(ct) {
+  tmp_df <- data.frame(cluster = ct,
+                       gene = specific_markers[[ct]],
+                       p_val = 0)
+  return(tmp_df)
+}) %>% dplyr::bind_rows()
+
+specific_markers_df$cluster <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                     x = specific_markers_df$cluster, 
+                                     perl = TRUE)
+
+```
+
+### Spatial transcriptomics
+This data comes from the paper [Integrating microarray-based spatial transcriptomics and single-cell RNA-seq reveals tissue architecture in pancreatic ductal adenocarcinomas](https://www.nature.com/articles/s41587-019-0392-8)
+It can be accessed under GEO accession number GSE111672.
+
+```{r}
+sample_geo <- c("GSM3036911", "GSM3405534", "GSM4100721", "GSM4100722",
+                "GSM4100723", "GSM4100724")
+
+st_list <- sapply(sample_geo, USE.NAMES = TRUE, function(geo) {
+  print(geo)
+  sample <- stringr::str_split(string = sample_dict[[geo]], pattern = " ")[[1]][1]
+  geo_path <- sprintf("analysis/pancreas_PDAC/data/%s/%s", sample, geo)
+  st_tibble <- readr::read_tsv(file = sprintf("%s/filtered_feature_bc_matrix.tsv", geo_path), 
+                            col_names = TRUE) %>%
+    tibble::column_to_rownames("X1")
+  
+  st_se <- Spaniel::createSeurat(counts = st_tibble, 
+               barcodeFile = sprintf("%s/spatial/tissue_positions_list_spatial_object.tsv", geo_path), 
+               projectName = "PDAC-B",
+               sectionNumber = "1")
+  st_se <- Seurat::SCTransform(st_se)
+
+  ### Load histological image into R
+  fn_image <- list.files(path = sprintf("%s/spatial", geo_path), pattern = "lowres_rot.jpg$")[1]
+  imgFile <- sprintf("%s/spatial/%s", geo_path, fn_image)
+  image <- Spaniel::parseImage(imgFile)
+  st_se@images <- list(image)
+  
+  st_se$slice <- sample_dict[[geo]]
+  return(list(st_se))
+})
+```
+
+### Deconvolution matrices
+```{r}
+decon_mtrx_dir <- sprintf("%s/%s", an_pdac, robj_dir)
+decon_fn_ls <- list.files(path = decon_mtrx_dir,
+                       pattern = "^decon_mtrx_ica-integration_specific")[1:6]
+
+
+
+immune_decon_mtrx_ls <- lapply(decon_fn_ls, function(fn) {
+  path_str <- paste(decon_mtrx_dir, fn, sep = "/")
+  decon_mtrx <- readRDS(file = path_str)
+  return(decon_mtrx)
+})
+
+names_ls <- sapply(decon_fn_ls, USE.NAMES = FALSE, function(i) stringr::str_split(string = i, pattern = "_")[[1]][5])
+
+names(immune_decon_mtrx_ls) <- names_ls
+```
+
+## Plots
+### Load all pdac-immune dataset
+```{r}
+ica_se <- readRDS(sprintf("%s/data/pancreas_seuobj_atlas.rds", an_pdac))
+ica_se[["specific_cell_type_mod"]] <- dplyr::if_else(ica_se$specific_cell_type %in% 
+                                                   c("Macro_1", "Macro_2", "Macro_3"), 
+                                                 "Macrophages", 
+                                                 if_else(ica_se$specific_cell_type == "Mono",
+                                                         "Monocytes",
+                                                         as.character(ica_se$specific_cell_type)))
+```
+
+### Cell type table
+```{r}
+df_count <- data.frame(ica_se@meta.data) %>% 
+  dplyr::count(specific_cell_type_mod)
+
+count_wide <- cbind(df_count[1:8, ], df_count[9:16, ], df_count[17:24, ])
+colnames(count_wide) <- make.unique(colnames(count_wide))
+count_wide[is.na(count_wide)] <- ""
+
+cell_type_table <- flextable(count_wide) %>%
+  bold(j = c(1, 3, 5),
+       bold = TRUE,
+       part = "body") %>%
+  bold(part = "header", 
+       bold = TRUE ) %>% 
+  set_header_labels(specific_cell_type_mod = "Cell type",
+                    n = "Number of cells",
+                    specific_cell_type_mod.1 = "Cell type",
+                    n.1 = "Number of cells",
+                    specific_cell_type_mod.2 = "Cell type",
+                    n.2 = "Number of cells") %>%
+  # align_nottext_col(align = "center") %>%
+  fontsize(i = 1, 
+           j = NULL, 
+           size = 15, 
+           part = "header") %>% 
+  fontsize(i = NULL, 
+           j = NULL, 
+           size = 12, 
+           part = "body") %>% 
+  autofit() %>% 
+  add_footer_lines("CM: Central Memory; EM: Effector memory; T reg: regulatory T cells; Th: T helper; cDC: common dendritic cells; mDC: myeloid denritic cells; NK: natural killer; pDC: plasmacytoid dendritic cells.") %>% 
+  add_header_lines("Supplementary Table 2: Composition of the PDAC immune reference scRNAseq dataset.") %>% 
+  fontsize(i = NULL, 
+           j = NULL, 
+           size = 12, 
+           part = "footer") %>%
+  fontsize(i = NULL, 
+           j = NULL, 
+           size = 15, 
+           part = "header") %>%
+  flextable::theme_zebra() %>%
+  align(j = c(2, 4, 6), 
+        part = "body", 
+        align = "center")
+cell_type_table
+flextable_dim(cell_type_table)
+save_as_image(cell_type_table, 
+              path = sprintf("%s/%s/Supplementary_Table_2_PDAC-Immune.pdf",
+                             an_pdac, plt_dir),
+              zoom = 1, 
+              expand = 100)
+
+save_as_docx(cell_type_table, 
+             path = sprintf("%s/%s/Supplementary_Table_4_PDAC-Unpaired.docx",
+                             an_pdac, plt_dir))
+```
+
+
+### UMAP immune cells
+```{r}
+colourCount <- length(unique(ica_se$specific_cell_type))
+getPalette <- colorRampPalette(brewer.pal(8, "Dark2"))
+```
+
+```{r}
+# ica_se <- Seurat::SCTransform(object = ica_se)
+# ica_se <- Seurat::RunPCA(ica_se, verbose = FALSE)
+# Seurat::ElbowPlot(ica_se, ndims = 50)
+# ica_se <- Seurat::FindNeighbors(ica_se,
+#                                  dims = 1:40)
+# ica_se <- Seurat::FindClusters(ica_se,
+#                                 verbose = FALSE,
+#                                 resolution = c(1, 2, 3, 4, 5))
+# ica_se <- Seurat::RunUMAP(ica_se,
+#                            dims = 1:40)
+
+ica_umap <- DimPlot(ica_se,
+        group.by = "specific_cell_type_mod", 
+        reduction = "umap", 
+        label = FALSE,
+        pt.size = 1.5, label.size = 1.25) +
+  scale_color_manual(values = getPalette(colourCount)) +
+  guides(color = guide_legend(ncol = 1,
+                              override.aes = list(size = 3))) +
+  theme_void()
+
+ica_umap
+ggpubr::ggexport(plotlist = list(ica_umap),
+                 filename = sprintf("%s/%s/immune_cells_UMAP.pdf",
+                                    an_pdac, plt_dir),
+                 width = 12,
+                 height = 9,
+                 res = 600)
+
+ggpubr::ggexport(plotlist = list(ica_umap),
+                 filename = sprintf("%s/%s/immune_cells_UMAP.jpeg",
+                                    an_pdac, plt_dir),
+                 width = 4000,
+                 height = 3000,
+                 res = 400)
+```
+
+### Gene + Cell type arrangement
+#### Spatial location
+
+dataframe with plot names
+```{r}
+cell_types_plt <- sort(unique(ica_se$specific_cell_type))
+# cell_types <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+#                                  x = cell_types_plt, 
+#                                  perl = TRUE)
+
+# colnames(decon_mtrx_a) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+#                                  x = colnames(decon_mtrx_a),
+#                                  perl = TRUE)
+
+# cell_types <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+#                                  x = cell_types, 
+#                                  perl = TRUE)
+
+pdac_plt_names <- data.frame(df_name = gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
+                                            x = cell_types_plt,
+                                            perl = TRUE), 
+                           plt_name = cell_types_plt,
+                           col_ct = col_vector[seq_len(length(cell_types_plt))])
+```
+
+##### Plot gene expression
+```{r eval = FALSE}
+immune_gene_plts <- lapply(names(immune_decon_mtrx_ls), function(geo) {
+  decon_mtrx <- immune_decon_mtrx_ls[[geo]]
+  colnames(decon_mtrx) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                 x = colnames(decon_mtrx), 
+                                 perl = TRUE)
+  cell_types <- colnames(decon_mtrx)[! colnames(decon_mtrx) %in% "res.ss"]
+  
+  st_se <- st_list[[geo]]
+  ### 1st plot the marker gene for that cell type
+  gene_plt <- lapply(cell_types, function(ct) {
+    print(ct)
+  
+    gene <- gene_dict[ct]
+    print(gene)
+    tmp_plt <- spanielPlot(object = st_se,
+            grob = st_se@images[[1]],
+            plotType = "Gene",
+            gene = gene,
+            ptSizeMax = 3, 
+            ptSizeMin = 0,
+            customTitle = sprintf("%s; Expression of: %s", sample_dict[[geo]], gene)) +
+      theme_classic() +
+      theme(
+        plot.title = element_text(hjust = 0.5, size = 10),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank()
+        ) +
+      scale_color_gradientn(
+        # colours = wesanderson::wes_palette("Zissou1", 100, type = "continuous"),
+        colours = heat.colors(10, rev = TRUE)) +
+      labs(color = sprintf("Expression: %s", gene),
+           size = sprintf("Expression: %s", gene)) +
+      coord_fixed(1)
+  
+  })
+})
+
+names(immune_gene_plts) <- names_ls
+
+```
+
+##### Plot cell type signature
+
+Add signature to plot name dataframe
+```{r}
+pdac_plt_names$firm_name <- paste(pdac_plt_names$df_nam, "signature1", sep = "_")
+pdac_plt_names$firm_plot <- paste(pdac_plt_names$plt_name, "Signature", sep = " ")
+```
+
+Marker genes
+```{r}
+immune_markers <- readRDS("analysis/pancreas_PDAC/data/Atlas_specific_markers_150.rds")
+```
+
+##### Signature plot list
+```{r}
+immune_signature_plts <- lapply(names(immune_decon_mtrx_ls), function(geo) {
+  print(geo)
+  decon_mtrx <- immune_decon_mtrx_ls[[geo]]
+  colnames(decon_mtrx) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                 x = colnames(decon_mtrx), 
+                                 perl = TRUE)
+  cell_types <- colnames(decon_mtrx)[! colnames(decon_mtrx) %in% "res.ss"]
+  
+  st_se <- st_list[[geo]]
+  
+  
+  ## Addcell type signature to the metadata
+  for (i in cell_types) {
+    print(i)
+    # Pull gene marker list
+    features <- immune_markers[[pdac_plt_names[pdac_plt_names$df_name == i, "plt_name"]]]
+    
+    # Use top 25 features
+    features <- features[features %in% rownames(st_se)][1:25]
+    
+    # Pull gene marker list
+    st_se <- AddModuleScore(
+    object = st_se,
+    features = list(features),
+    name = sprintf("%s_signature", i))
+    
+  }
+  
+  signature_colnames <- colnames(st_se@meta.data)[grepl(pattern = "signature",
+                                                        x = colnames(st_se@meta.data))]
+  
+  # Prepare object to plot signatures by puting the gene signatures in the counts slots
+  # rownames(decon_mtrx) <- rownames(st_se@meta.data)
+  # st_se@assays$RNA@scale.data <- t(st_se@meta.data[, signature_colnames])
+  # st_se@assays$RNA@data <- t(st_se@meta.data[, signature_colnames])
+  # st_se@meta.data <- cbind(st_se@meta.data, decon_mtrx)
+  
+  # Plot Signatures
+  sig_plt <- lapply(signature_colnames, function(firma){
+    print(firma)
+  
+    tmp_plt <- plot_spaniel(data_df = data.frame(st_se@meta.data),
+                 grob = st_se@images[[1]],
+                 x = "x",
+                 y = "y",
+                 point_colour = firma,
+                 point_size = firma,
+                 point_alpha = firma) +
+      ggplot2::theme_void() +
+      ggplot2::labs(title = sprintf("%s - Signature score of %s", 
+                                  sample_dict[[geo]], 
+                                  pdac_plt_names[pdac_plt_names$firm_name == firma, "plt_name"])) +
+    theme(plot.title = element_text(hjust = 0.5, size = 12)) +
+    ggplot2::scale_size_continuous(range=c(0, 3)) +
+    ggplot2::scale_color_gradientn(colours = heat.colors(10, rev = TRUE)) +
+    labs(color = "Signature score",
+         size = "Signature score"
+         # alpha = "Signature score"
+         )
+
+
+    # tmp_plt <- spanielPlot(object = st_se, 
+    #         grob = st_se@images[[1]],
+    #         plotType = "Gene",
+    #         gene = firma,
+    #         ptSizeMax = 0.5, 
+    #         ptSizeMin = 0.1,
+    #         customTitle = sprintf("%s; Signature for cell type: %s", 
+    #                               sample_dict[[geo]], pdac_plt_names[pdac_plt_names$firm_name == firma, "plt_name"])) +
+    #   theme_classic() +
+    #   theme(
+    #     plot.title = element_text(hjust = 0.5, size = 10),
+    #     axis.ticks = element_blank(),
+    #     axis.text = element_blank(),
+    #     axis.title = element_blank(),
+    #     axis.line = element_blank()
+    #     ) +
+    #   scale_color_gradientn(
+    #     colours = heat.colors(10, rev = TRUE),
+    #     name = "Score") +
+    #   scale_size_continuous(name = "Score", range = c(0, 3)) +
+    #   coord_fixed(1)
+    # 
+    return(tmp_plt)
+    })
+  
+  return(sig_plt)
+})
+
+names(immune_signature_plts) <- names_ls
+
+lapply(names(immune_signature_plts), function(geo) {
+  plt_ls <- immune_signature_plts[[geo]]
+  ggpubr::ggarrange(plotlist = plt_ls,
+                    ncol = 4,
+                    nrow = 4,
+                    align = "hv") %>% 
+    ggpubr::ggexport(filename = sprintf("%s/%s/immune_cell_signature_arrange_plts_%s.pdf", 
+                                        an_pdac, plt_dir, geo),
+                     width = 24,
+                     height = 18,
+                     res = 600)
+})
+
+```
+
+##### Plot cell type location
+```{r}
+immune_ct_plts <- lapply(names(immune_decon_mtrx_ls), function(geo) {
+  
+  decon_mtrx <- immune_decon_mtrx_ls[[geo]]
+  colnames(decon_mtrx) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                 x = colnames(decon_mtrx), 
+                                 perl = TRUE)
+  
+  cell_types <- colnames(decon_mtrx)[! colnames(decon_mtrx) %in% "res.ss"]
+  
+  st_se <- st_list[[geo]]
+  
+  # Plot cell type proportions
+  rownames(decon_mtrx) <- rownames(st_se@meta.data)
+  
+  # st_se@assays$RNA@scale.data <- t(decon_mtrx)
+  # st_se@assays$RNA@data <- t(decon_mtrx)
+  st_se@meta.data <- cbind(st_se@meta.data, decon_mtrx)
+
+  ct_plt <- lapply(cell_types, function(ct){
+    print(ct)
+  
+    tmp_plt <- plot_spaniel(data_df = data.frame(st_se@meta.data),
+               grob = st_se@images[[1]],
+               x = "x",
+               y = "y",
+               point_colour = ct,
+               point_size = ct,
+               point_alpha = ct) +
+    ggplot2::theme_void() +
+    ggplot2::labs(title = sprintf("%s - Proportion of %s", 
+                                sample_dict[[geo]], 
+                                pdac_plt_names[pdac_plt_names$df_name == ct, "plt_name"])) +
+    theme(plot.title = element_text(hjust = 0.5, size = 12))
+
+    # tmp_plt <- spanielPlot(object = st_se, 
+    #         grob = st_se@images[[1]],
+    #         plotType = "Gene",
+    #         gene = ct,
+    #         ptSizeMax = 0.5, 
+    #         ptSizeMin = 0,
+    #         customTitle = sprintf("%s; Proportion of cell type: %s", 
+    #                               sample_dict[[geo]], pdac_plt_names[pdac_plt_names$df_name == ct, "plt_name"])) +
+    #   # geom_point(aes(alpha = ct)) +
+    #   theme_classic() +
+    #   theme(
+    #     plot.title = element_text(hjust = 0.5, size = 10),
+    #     axis.ticks = element_blank(),
+    #     axis.text = element_blank(),
+    #     axis.title = element_blank(),
+    #     axis.line = element_blank()
+    #     ) +
+    #   scale_color_gradientn(
+    #     colours = heat.colors(10, rev = TRUE),
+    #     limits = c(0, 1),
+    #     name = "Proportion") +
+    #   scale_size_continuous(limits = c(0, 1), name = "Proportion", range = c(0, 3)) +
+    #   coord_fixed(1)
+    ggpubr::ggexport(plotlist = list(tmp_plt),
+                     filename = sprintf("%s/%s/immune_cell_type_%s_plts_%s.jpeg",
+                                        an_pdac, plt_dir, ct, geo),
+                     width = 2500,
+                     height = 2000,
+                     res = 400)
+    return(tmp_plt)
+    })
+  })
+
+names(immune_ct_plts) <- names_ls
+
+lapply(names(immune_ct_plts), function(geo) {
+  plt_ls <- immune_ct_plts[[geo]]
+  ggpubr::ggarrange(plotlist = plt_ls,
+                    ncol = 4,
+                    nrow = 4,
+                    align = "hv") %>% 
+    ggpubr::ggexport(filename = sprintf("%s/%s/immune_cell_type_arrange_plts_%s.pdf", 
+                                        an_pdac, plt_dir, geo),
+                     width = 24,
+                     height = 18,
+                     res = 600)
+})
+
+```
+
+### Join signature - location
+```{r}
+lapply(names(immune_ct_plts), function(geo) {
+
+    # Plot each cell type with its marker gene
+  lapply(seq_len(length(immune_signature_plts[[geo]])), function(i) {
+    gene_plt <- immune_signature_plts[[geo]][[i]]
+    ct_plt <- immune_ct_plts[[geo]][[i]]
+    
+    arr_plt <- cowplot::plot_grid(plotlist = list(gene_plt, ct_plt),
+                      ncol = 2, 
+                      nrow = 1, 
+                      align = "hv") +   
+      theme(plot.background = element_rect(fill = NA, color = "black", size = 2),
+        panel.background = element_blank(),
+        plot.margin = margin(10, 10, 10, 10))
+  
+    ## Rounded edges
+    g <- ggplotGrob(arr_plt)
+    bg <- g$grobs[[1]]
+    round_bg <- grid::roundrectGrob(x=bg$x, y=bg$y, width=bg$width, height=bg$height,
+                              r=unit(0.1, "snpc"),
+                              just=bg$just, name=bg$name, gp=bg$gp, vp=bg$vp)
+    g$grobs[[1]] <- round_bg
+    g_plt <- cowplot::plot_grid(g) + theme(plot.margin = margin(10, 10, 10, 10))
+    return(g_plt)
+  
+  }) %>%
+    ggpubr::ggarrange(plotlist = ., ncol = 3, nrow = 3) %>% 
+    ggpubr::ggexport(., 
+                   filename = sprintf("%s/%s/Supplementary_Figure_X_immune_spatial_deconv_signature-location_%s_%s_%s.pdf", an_pdac, plt_dir, geo, id_comp, id_nmf),
+                   height = 15, 
+                   width = 32)
+
+})
+```
+
+### Interaction Heatmap
+```{r}
+immune_hmp_plts <- lapply(sample_pdac, function(geo) {
+  
+  decon_mtrx <- immune_decon_mtrx_ls[[geo]]
+  decon_mtrx <- decon_mtrx[, colnames(decon_mtrx)[!colnames(decon_mtrx) %in% "res_ss"]]
+  
+  # Change to right column names
+  colnames(decon_mtrx) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                 x = colnames(decon_mtrx), 
+                                 perl = TRUE)
+  new_names <- data.frame(df_name = colnames(decon_mtrx)) %>% 
+    left_join(pdac_plt_names, by = "df_name") %>% 
+    pull(plt_name)
+  
+  colnames(decon_mtrx) <- new_names
+
+  
+  hm_plt <- get_colocalization_heatmap(decon_mtrx = decon_mtrx) +
+    labs(title = sprintf("%s Colocalization heatmap", geo)) +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 20),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 15))
+  
+  return(hm_plt)
+})
+
+immune_hmp_plts %>% 
+  ggpubr::ggarrange(plotlist = ., 
+                    ncol = 3, 
+                    nrow = 2) %>% 
+  ggpubr::ggexport(.,
+                 filename = sprintf("%s/%s/Suppl_Fig_NNN_interaction_hm_immune_%s_%s.pdf", an_pdac, plt_dir, id_comp, id_nmf),
+                 width = 32,
+                 height = 18,
+                 res = 600)
+
+```
+
+### Interaction Graph
+```{r}
+get_spatial_interaction_graph <- function(decon_mtrx) {
+
+  # Check variables
+  if (!is.matrix(decon_mtrx)) stop("ERROR: decon_mtrx must be a matrix object!")
+
+  # Require needed libraries
+  suppressMessages(require(igraph))
+
+  if (is.null(colnames(decon_mtrx))) {
+    colnames(decon_mtrx) <- as.character(1:ncol(decon_mtrx))
+  }
+  comb_id <- arrangements::combinations(x = colnames(decon_mtrx), k = 2, replace = F)
+  comb_id_str <- paste(comb_id[, 1], comb_id[, 2], sep = "_")
+  comb_val <- matrix(data = 0, nrow = nrow(comb_id), ncol = 1)
+  rownames(comb_val) <- comb_id_str
+
+  # Iterate over all the spot's predicted cell composition
+  for (i in seq_len(nrow(decon_mtrx))) {
+    mtp_row <- decon_mtrx[i, ]
+    mtp_row_sub <- mtp_row[mtp_row != 0]
+
+    # If there is only one cell type ignore the loop
+    if (length(names(mtp_row_sub)) > 1) {
+
+      # Iterate over all the cell types within that spot and fill the comb_val matrix
+      # names(mtp_row_sub)[(pos+1):length(mtp_row_sub)] - Set iterator pos to avoid counting things twice
+      # ii in names(mtp_row_sub)[-length(mtp_row_sub)] - Don't iterate over the last one since it will have been already counted by all the previous ones
+      pos <- 1
+      for (ii in names(mtp_row_sub)[-length(mtp_row_sub)]) {
+
+        for(iii in names(mtp_row_sub)[(pos+1):length(mtp_row_sub)]){
+          tmp_id <- paste(ii, iii, sep = "_")
+          comb_val[rownames(comb_val) == tmp_id,] = comb_val[rownames(comb_val) == tmp_id,] + 1
+        }
+        pos = pos + 1
+      }
+    }
+  }
+
+
+  # Join matrices and scale comb_val centering it around 1
+  ntwrk_mtrx <- cbind(comb_id, comb_val)
+  # Remove rows belonging to cell types not interacting
+  ntwrk_mtrx <- ntwrk_mtrx[ntwrk_mtrx[, 3] != "0", ]
+  # add column with scaled values
+  ntwrk_mtrx <- cbind(ntwrk_mtrx, scale(as.numeric(ntwrk_mtrx[, 3]), center = 1))
+
+
+  # data <- matrix(sample(0:1, 100, replace=TRUE, prob=c(0.8,0.2)), nc=10)
+  links <- data.frame(
+    source = ntwrk_mtrx[, 1],
+    target = ntwrk_mtrx[, 2],
+    importance = as.numeric(ntwrk_mtrx[, 4])
+  )
+  nodes <- data.frame(name=colnames(decon_mtrx))
+
+  network <- igraph::graph_from_data_frame(d = links,
+                                           vertices = nodes,
+                                           directed = F)
+  # Set the degree to the number of spots a cell type is found in
+  # deg <- degree(network, mode="all")
+  deg <- colSums(decon_mtrx > 0)
+  deg_scale <- scale(deg, center = FALSE, scale = TRUE)
+
+  return(network)
+}
+```
+
+```{r}
+pdf(sprintf("%s/%s/Suppl_Fig_MMM_interaction_graph_immune_arrange.pdf", an_pdac, plt_dir), 
+    width = 16,
+    height = 12)
+par(mfrow = c(2, 3))
+
+immune_graph_plts <- lapply(sample_pdac, function(geo) {
+  
+  decon_mtrx <- immune_decon_mtrx_ls[[geo]]
+  decon_mtrx <- decon_mtrx[, colnames(decon_mtrx)[!colnames(decon_mtrx) %in% "res_ss"]]
+  
+  # Change to right column names
+  colnames(decon_mtrx) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+                                 x = colnames(decon_mtrx), 
+                                 perl = TRUE)
+  new_names <- data.frame(df_name = colnames(decon_mtrx)) %>% 
+    left_join(pdac_plt_names, by = "df_name") %>% 
+    pull(plt_name)
+  
+  colnames(decon_mtrx) <- new_names
+
+  
+  graph_ntw <- get_spatial_interaction_graph(decon_mtrx = decon_mtrx)
+  
+  deg <- colSums(decon_mtrx > 0) / 10
+  
+  # Open a pdf file
+  plot(graph_ntw,
+       # Size of the edge
+       edge.width = E(graph_ntw)$importance,
+       # Size of the buble
+       vertex.size = deg/2,
+       vertex.color = "skyblue",
+       layout = layout.circle,
+       main = sprintf("%s spatial interaction network",geo ))
+  
+})
+
+dev.off()
+
+par(mfrow = c(1, 1))
+
+```
