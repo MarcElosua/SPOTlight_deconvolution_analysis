@@ -27,6 +27,7 @@ CRAN:
 
 ## Docker environments
 Docker environments with all the pertinent dependencies are available at dockerhub.
+
 To download the R environment image
 
     # R environment
