@@ -1,0 +1,370 @@
+---
+title: "Mouse brain supplementary figures"
+author: "Marc Elosua-Bayes"
+date: "4/17/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(purrr)
+library(SPOTlight)
+library(NMF)
+library(nnls)
+library(scrattch.io)
+library(cowplot)
+library(imager)
+library(scatterpie)
+library(tidyverse)
+library(flextable)
+library(webshot)
+```
+
+## Introduction
+
+This is an Rmarkdown document where we are going to build the supplementary figures related to the brain.
+We are going to plot:
+* Table with number of cells per cell type
+* Topic profile reproducibility
+* Plot showing the location of all the cell types one by one
+
+## Load data
+Paths
+```{r}
+tech <- "sc"
+tissue <- "allen_ref_70k"
+dwn_smplng <- "both"
+org <- "mm"
+source("misc/paths_vrs.R")
+```
+
+Set common parameters
+```{r}
+clust_vr <- "subclass_label"
+cl_n <- 100
+method <- "nsNMF"
+transf <- "uv"
+hvg <- 3000
+FC <- 1
+pct1 <- 0.9
+
+id_nmf <- sprintf("cln-%s_transf-%s_method-%s_hvg-%s_FC-%s_pct1-%s", 
+                  cl_n, transf, method, hvg, FC, pct1)
+data_dir <- "data/MusMusculus/allen_reference"
+options(stringsAsFactors = FALSE)
+
+
+library(RColorBrewer)
+n <- 60
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector  <-  unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+```
+
+## Load data
+```{r}
+brain <- readRDS(sprintf("%s/%s/brain1_processed.RDS", an_mouse, robj_dir))
+
+allen_ref_70k <- readRDS(file = "data/MusMusculus/allen_reference/allen_ref_70k_processed.RDS")
+
+decon_mtrx <- readRDS(file = sprintf("decon_mtrx_%s_%s.RDS", id_comp, id_nmf))
+```
+
+Join the data so its easier to work with
+```{r}
+cell_types <- colnames(decon_mtrx)[which(colnames(decon_mtrx) != "res_ss")]
+
+decon_mtrx_prop <- round(decon_mtrx[, cell_types] / rowSums(decon_mtrx[, cell_types]), 4)
+decon_mtrx_prop[is.na(decon_mtrx_prop)] <- 0
+brain@meta.data <- cbind(brain@meta.data, decon_mtrx_prop)
+cell_types_metadata <- colnames(brain@meta.data)[colnames(brain@meta.data) %in% cell_types]
+```
+
+To maintain consistent colors for each cell type between different plots we will create a dataframe of equivalencies which we will draw colors from
+```{r}
+col_df <- data.frame(cell_types = cell_types,
+           col_vector = col_vector[1:length(cell_types)])
+```
+
+Dataframe with plot names
+```{r}
+colnames(decon_mtrx)
+ct_names <- c("Astro", "CA1sp", "CA1sp.SUB-sp.Kcnip1", "CA2sp.IG", "CA3sp", 
+              "Car3", "CR", "DG", "Doublet", "Endo", "IT.RHP.Dcn", 
+              "L2.3.IT.Cdc14a", "L2.3.IT.Cxcl14", "L2.3.IT.Ndst4.Endou", 
+              "L2.3.IT.Otof", "L2.3.IT.Plch1", "L4.IT", "L4.5.IT", "L5.ET", 
+              "L5.IT", "L6.CT" ,"L6.IT", "L6b", "Lamp5", "Lamp5.Lhx6", 
+              "Low.Quality", "Ly6g6e", "Macrophage", "Meis2", "NP", "Oligo",
+              "PIR.Six3", "POST-PRE-PAR.Ptgfr", "Pvalb", "RHP.Cplx3", 
+              "RSP_ACA.IT.Scnn1a", "RSP.ACA.L4.5.IT", "Serpinf1", "SMC", "Sncg",
+              "Sncg.Ndnf.HPF", "Sst", "Sst.Chodl", "SUB-Sp.Ndst4", "Unknown", 
+              "Vip", "VLMC")
+
+plt_names <- c("Astrocytes", "CA1sp", "CA1sp/SUB-sp Kcnip1", "CA2sp/IG", "CA3sp",
+               "Car3", "Cajal-Retzius", "DG", "Doublet", "Endothelium", 
+               "IT RHP Dcn", "L2/3 IT Cdc14a", "L2/3 IT Cxcl14", 
+               "L2/3 IT Ndst4 Endou", "L2/3 IT Otof", "L2/3 IT Plch1", "L4 IT", 
+               "L4/5 IT", "L5 ET", "L5 IT", "L6 CT" ,"L6 IT", "L6b", "Lamp5", 
+               "Lamp5 Lhx6", "Low quality", "Ly6g6e", "Macrophage", "Meis2", 
+               "Neural Progenitor", "Oligodendrocyte", "PIR Six3", 
+               "POST-PRE-PAR Ptgfr", "Pvalb", "RHP Cplx3", "RSP/ACA IT Scnn1a", 
+               "RSP/ACA L4/5 IT", "Serpinf1", "Smooth Muscle Cells", "Sncg", 
+               "Sncg/Ndnf HPF", "Sst", "Sst Chodl", "SUB-Sp Ndst4", "Unknown", 
+               "Vip", "VLMC")
+
+ct_df <- data.frame(ct_names, plt_names)
+```
+
+### Cell type Table
+```{r}
+df_count <- data.frame(allen_ref_70k@meta.data) %>% 
+  count(subclass_label)
+
+colnames(df_count) <- make.unique()
+
+count_wide <- cbind(df_count[1:16, ], df_count[17:32, ], df_count[33:48, ])
+colnames(count_wide) <- make.unique(colnames(count_wide))
+count_wide[is.na(count_wide)] <- ""
+
+cell_type_table <- flextable(count_wide) %>%
+  bold(j = c(1, 3, 5), 
+       bold = TRUE, 
+       part = "body") %>%
+  bold(part = "header", 
+       bold = TRUE ) %>% 
+  set_header_labels(subclass_label = "Cell type",
+                    n = "Number of cells",
+                    subclass_label.1 = "Cell type",
+                    n.1 = "Number of cells",
+                    subclass_label.2 = "Cell type",
+                    n.2 = "Number of cells",
+                    subclass_label.3 = "Cell type",
+                    n.3 = "Number of cells") %>%
+  # align_nottext_col(align = "center") %>%
+  fontsize(i = 1, 
+           j = NULL, 
+           size = 15, 
+           part = "header") %>% 
+  fontsize(i = NULL, 
+           j = NULL, 
+           size = 12, 
+           part = "body") %>% 
+  autofit() %>% 
+  add_header_lines("Supplementary Table 1: Composition of the Allen Mouse Brain Atlas dataset.") %>% 
+  # add_footer_lines("sp: stratum pyramidale; IG") %>%
+  fontsize(i = NULL, 
+           j = NULL, 
+           size = 12, 
+           part = "header") %>% 
+  flextable::theme_zebra() %>%
+  align(j = c(2, 4, 6), 
+        part = "body", 
+        align = "center")
+  # theme_vanilla()
+cell_type_table
+
+save_as_image(cell_type_table, 
+              path = sprintf("%s/%s/Supplementary_Table_1_Allen_Mouse_Brain_Atlas.pdf",
+                             an_mouse, plt_dir),
+              zoom = 1, 
+              expand = 100)
+```
+
+### All cell types location
+
+```{r}
+join_spatial_plots <- function(spatial_obj, ct) {
+  ###########################################################################################################
+  #### This functions takes in a feature to plot in 2 spatial slides and returns it with a unique legend ####
+  ###########################################################################################################
+  library(ggplot2)
+  library(ggpubr)
+  library(cowplot)
+  library(Seurat)
+  
+  # Set common legend theme
+  legend_theme <-  theme(legend.text = element_text(colour = "#3b3a39", size = 10),
+                       legend.title = element_text(colour = "#3b3a39", vjust = 1))
+  
+  orig_pt <- SpatialFeaturePlot(spatial_obj,
+                   features = ct,
+                   pt.size.factor = 1,
+                   alpha = c(0, 1)) + 
+    theme(plot.title = element_text(hjust = 0.5))
+  
+  ### Modify individual plots ###
+  orig_pt_ant <- orig_pt[[1]] +
+    cowplot::theme_map() + 
+    theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))+ 
+    scale_fill_gradientn(
+      # colours = colorRamps::matlab.like2(10),
+      colours = heat.colors(10, rev = TRUE),
+      limits = c(0, 1)) +
+    labs(title = "", 
+       fill = "Proportion")
+  
+  orig_pt_post <- orig_pt[[2]] +
+    labs(title = "", fill = ct) +
+    cowplot::theme_map() + 
+    theme(plot.margin = unit(c(0, 0, 0, 0), "cm")) + 
+    scale_fill_gradientn(
+      # colours = colorRamps::matlab.like2(10),
+      colours = heat.colors(10, rev = TRUE),
+      limits = c(0, 1))
+
+  return(list(orig_pt_ant, orig_pt_post))
+}
+```
+
+```{r}
+ct_arrange <- lapply(cell_types, function(ct) {
+  
+  ct_ls <- join_spatial_plots(spatial_obj = brain, ct = ct)
+  plt_tmp <- cowplot::plot_grid(plotlist = list(ct_ls[[1]] + theme(legend.position = "none"), 
+                                                ct_ls[[2]] + theme(legend.position = "none")), 
+                                nrow = 1, 
+                                ncol = 2, 
+                                align = "hv", 
+                                labels = ct_df[ct_df$ct_names == ct, "plt_names"]) + 
+    theme(plot.margin = unit(c(1,1,1,1), "line"))
+  
+  leg_grobtable <- get_legend(ct_ls[[1]])
+  plt_titleless <- cowplot::plot_grid(plotlist = list(plt_tmp, leg_grobtable), 
+                     ncol = 2, 
+                     nrow = 1, rel_widths = c(1, 0.2))
+}) %>% 
+  ggarrange(plotlist = ., ncol = 4, nrow = 5, align = "hv")
+
+ggpubr::ggexport(plotlist = ct_arrange,
+                   filename = sprintf("%s/%s/Supplementary_Figure_AAA_all_cell_types_grid_%s_%s.pdf", 
+                                 an_mouse, plt_dir, id_comp, id_nmf), 
+                   width = 24, 
+                   height = 18, 
+                 res = 600)
+```
+
+
+### Topic signature reproducibility
+Load cluster markers
+```{r}
+cluster_markers_all <- readRDS(file = "data/MusMusculus/allen_reference/markers_allen_ref_70k.RDS")
+
+cluster_markers_filt <- cluster_markers_all %>% 
+  filter(avg_logFC > FC & pct.1 > pct1)
+```
+
+Downsample + train model
+```{r}
+id_nmf_iter <- sprintf("cln-30_transf-%s_method-%s_hvg-%s_FC-%s_pct1-%s",
+                     transf, method, hvg, FC, pct1)
+
+set.seed(123)
+nmf_mod_ls_10 <- lapply(seq_len(10), function(i) {
+  print(i)
+  print("Downsmapling")
+  allen_ref_70k_down <- downsample_se_obj(se_obj = allen_ref_70k,
+                                          clust_vr = clust_vr,
+                                          cluster_markers = cluster_markers_filt, 
+                                          cl_n = 30, 
+                                          hvg = hvg)
+  
+  print("Training model")
+  nmf_mod_ls <- train_nmf(cluster_markers = cluster_markers_filt, 
+                          se_sc = allen_ref_70k_down, 
+                          mtrx_spatial = brain@assays$Spatial@counts, 
+                          ntop = NULL, 
+                          transf = transf, 
+                          clust_vr = clust_vr, 
+                          method = "nsNMF")
+
+  saveRDS(object = nmf_mod_ls, 
+        file = sprintf("%s/%s/nmf_mod_ls_10_%s_%s_iter-%s.rds", 
+                       an_mouse, robj_dir, id_comp, id_nmf_iter, i))
+
+  return(nmf_mod_ls)
+})
+
+
+```
+
+Topic profile plots
+```{r}
+topic_plt_arr <- lapply(seq_len(10), function(i) {
+  nmf_mod_ls <- readRDS(file = sprintf("%s/%s/nmf_mod_ls_10_%s_%s_iter-%s.rds", 
+                     an_mouse, robj_dir, id_comp, id_nmf_iter, i))
+
+  nmf_mod <- nmf_mod_ls[[1]]
+
+  # get matrix H
+  h <- coef(nmf_mod)
+  rownames(h) <- paste("Topic", 1:nrow(h), sep = " ")
+  
+  topic_profile_plts <- dot_plot_profiles_fun(h = h,
+                      train_cell_clust = nmf_mod_ls[[2]], 
+                      clust_vr = clust_vr)
+  
+  tmp_plt <- topic_profile_plts[[2]] + 
+    labs(title = sprintf("Topic signatures: Iteration %s", i)) +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 15),
+      axis.text.x = element_text(angle = 90, vjust = 0.5),
+      axis.text.y = element_text(size = 10))
+  
+  return(tmp_plt)
+}) %>% ggpubr::ggarrange(plotlist = ., ncol = 3, nrow = 4)
+
+
+ggpubr::ggexport(plotlist = list(topic_plt_arr),
+                 filename = sprintf("%s/%s/Supplementary_Figure_FFF_topic_signatures_arrange_10_%s_%s_.pdf", 
+                     an_mouse, plt_dir, id_comp, id_nmf_iter),
+                 width = 36,
+                 height = 36,
+                 res = 900)
+```
+
+Show topic profiles of all the cell types within a cell type
+```{r}
+i <- 1
+nmf_mod_ls <- readRDS(file = sprintf("%s/%s/nmf_mod_ls_10_%s_%s_iter-%s.rds", 
+                   an_mouse, robj_dir, id_comp, id_nmf_iter, i))
+
+nmf_mod <- nmf_mod_ls[[1]]
+```
+
+Extract matrices form the model:
+```{r}
+# get matrix W
+w <- basis(nmf_mod)
+dim(w)
+
+# get matrix H
+h <- coef(nmf_mod)
+dim(h)
+rownames(h) <- paste("Topic", 1:nrow(h), sep = " ")
+
+```
+
+Save all cell topic profiles
+```{r}
+topic_profile_plts <- dot_plot_profiles_fun(h = h,
+                      train_cell_clust = nmf_mod_ls[[2]],
+                      clust_vr = clust_vr)
+all_cell_prof_plt <- topic_profile_plts[[1]] + 
+  theme(
+    axis.text.x = element_blank(),
+    axis.text.y = element_text(size = 6)) +
+  scale_size(range = c(0, 10))
+
+ggpubr::ggexport(plotlist = list(all_cell_prof_plt),
+                 filename = sprintf("%s/%s/Supplementary_Figure_GGG_all_cell_topic_profile_%s_%s.pdf", 
+                                    an_mouse, plt_dir, id_comp, id_nmf_iter),
+                 width = 32,
+                 height = 32,
+                 res = 600)
+
+```

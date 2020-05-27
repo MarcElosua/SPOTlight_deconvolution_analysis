@@ -1,0 +1,891 @@
+---
+title: "Allen 70k  plots"
+author: "Marc Elosua-Bayes"
+date: "4/10/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+This is an Rmarkdown document where we are going to plot the results from the deconvolution.
+We are going to plot:
+* Spatial location + gene expression + ISH data
+* Scatterpie of all cell types + only spots with cell types of interest
+
+## Libraries
+```{r}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(purrr)
+library(SPOTlight)
+library(NMF)
+library(nnls)
+library(cowplot)
+library(imager)
+library(scatterpie)
+```
+
+## Paths
+```{r}
+tech <- "sc"
+tissue <- "allen_ref_70k"
+dwn_smplng <- "both"
+org <- "mm"
+source("misc/paths_vrs.R")
+```
+
+## Set common parameters
+```{r}
+clust_vr <- "subclass_label"
+cl_n <- 100
+method <- "nsNMF"
+transf <- "uv"
+hvg <- 3000
+FC <- 1
+pct1 <- 0.9
+seed_id <- 123
+
+id_nmf <- sprintf("cln-%s_transf-%s_method-%s_hvg-%s_FC-%s_pct1-%s_seed-%s", 
+                  cl_n, transf, method, hvg, FC, pct1, seed_id)
+data_dir <- "data/MusMusculus/allen_reference"
+options(stringsAsFactors = FALSE)
+
+
+library(RColorBrewer)
+n <- 60
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector  <-  unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+col_low <- "green"; col_high <- "red"
+```
+
+## Load data
+```{r}
+brain <- readRDS(sprintf("%s/%s/brain1_processed.RDS", an_mouse, robj_dir))
+decon_mtrx <- readRDS(file = sprintf("decon_mtrx_%s_%s2.RDS", id_comp, id_nmf))
+```
+
+Join the data so its easier to work with
+```{r}
+cell_types <- colnames(decon_mtrx)[which(colnames(decon_mtrx) != "res_ss")]
+
+decon_mtrx_prop <- round(decon_mtrx[, cell_types] / rowSums(decon_mtrx[, cell_types]), 4)
+decon_mtrx_prop[is.na(decon_mtrx_prop)] <- 0
+brain@meta.data <- cbind(brain@meta.data, decon_mtrx_prop)
+cell_types_metadata <- colnames(brain@meta.data)[colnames(brain@meta.data) %in% cell_types]
+```
+
+To maintain consistent colors for each cell type between different plots we will create a dataframe of equivalencies which we will draw colors from
+```{r}
+col_df <- data.frame(cell_types = c(cell_types, "L2.3"),
+           col_vector = col_vector[1:(length(cell_types)+1)])
+```
+
+To return the right name in the plots:
+```{r}
+ct_names <- c("Astro", "CA1sp", "CA1sp.SUB-sp.Kcnip1", "CA2sp.IG", "CA3sp", 
+              "Car3", "CR", "DG", "Doublet", "Endo", "IT.RHP.Dcn", 
+              "L2.3.IT.Cdc14a", "L2.3.IT.Cxcl14", "L2.3.IT.Ndst4.Endou", 
+              "L2.3.IT.Otof", "L2.3.IT.Plch1", "L4.IT", "L4.5.IT", "L5.ET", 
+              "L5.IT", "L6.CT" ,"L6.IT", "L6b", "Lamp5", "Lamp5.Lhx6", 
+              "Low.Quality", "Ly6g6e", "Macrophage", "Meis2", "NP", "Oligo",
+              "PIR.Six3", "POST-PRE-PAR.Ptgfr", "Pvalb", "RHP.Cplx3", 
+              "RSP_ACA.IT.Scnn1a", "RSP.ACA.L4.5.IT", "Serpinf1", "SMC", "Sncg",
+              "Sncg.Ndnf.HPF", "Sst", "Sst.Chodl", "SUB-Sp.Ndst4", "Unknown", 
+              "Vip", "VLMC", "L2.3")
+
+plt_names <- c("Astrocytes", "CA1sp", "CA1sp/SUB-sp Kcnip1", "CA2sp/IG", "CA3sp",
+               "Car3", "Cajal-Retzius", "DG", "Doublet", "Endothelium", 
+               "IT RHP Dcn", "L2/3 IT Cdc14a", "L2/3 IT Cxcl14", 
+               "L2/3 IT Ndst4 Endou", "L2/3 IT Otof", "L2/3 IT Plch1", "L4 IT", 
+               "L4/5 IT", "L5 ET", "L5 IT", "L6 CT" ,"L6 IT", "L6b", "Lamp5", 
+               "Lamp5 Lhx6", "Low quality", "Ly6g6e", "Macrophage", "Meis2", 
+               "Neural Progenitor", "Oligodendrocyte", "PIR Six3", 
+               "POST-PRE-PAR Ptgfr", "Pvalb", "RHP Cplx3", "RSP/ACA IT Scnn1a", 
+               "RSP/ACA L4/5 IT", "Serpinf1", "Smooth Muscle Cells", "Sncg", 
+               "Sncg/Ndnf HPF", "Sst", "Sst Chodl", "SUB-Sp Ndst4", "Unknown", 
+               "Vip", "VLMC", "L2/3")
+
+ct_df <- data.frame(ct_names, plt_names)
+
+```
+
+## Functions
+Function to plot both anterior and posterior scatterpie slides together
+```{r}
+joint_scatterpie_fun <- function(se_obj, cell_types_all, img_path1, img_path2, 
+                                 slice1, slice2, cell_types_interest, 
+                                 return_legend, img_alpha, scatterpie_alpha, 
+                                 pie_scale, col_df, arr_leg = TRUE) {
+  
+  anterior_plt <- spatial_scatterpie(se_obj = se_obj,
+                   cell_types_all = cell_types_all,
+                   img_path = img_path1,
+                   slice = slice1, 
+                   cell_types_interest = cell_types_interest, 
+                   return_legend = return_legend,
+                   img_alpha = img_alpha,
+                   scatterpie_alpha = scatterpie_alpha,
+                   pie_scale = pie_scale,
+                   col_df = col_df)
+  posterior_plt <- spatial_scatterpie(se_obj = se_obj,
+                     cell_types_all = cell_types_all,
+                     img_path = img_path2,
+                     slice = slice2, 
+                     cell_types_interest = cell_types_interest,
+                     return_legend = return_legend,
+                     img_alpha = img_alpha,
+                     scatterpie_alpha = scatterpie_alpha,
+                     pie_scale = pie_scale,
+                     col_df = col_df)
+  
+  tmp_plt <- scatterpie_plot(se_obj = se_obj,
+                 cell_types_all = cell_types_all,
+                 slice = slice1,
+                 scatterpie_alpha = scatterpie_alpha, 
+                 col_df = col_df) +
+             # labs(fill = "") +
+             theme(legend.position = "bottom",
+                   legend.text = element_text(colour = "#3b3a39", size = 9),
+                   legend.title = element_text(colour = "#3b3a39", vjust = 1, hjust = 0.5),
+                   legend.key.size = unit(1, "line")) +
+             guides(fill = guide_legend(nrow = 5, override.aes = list(size = 0.1)))
+  
+  legend_gtable <- get_legend(tmp_plt)
+  
+  scatterpie_tmp <- cowplot::plot_grid(plotlist = list(anterior_plt[[1]],
+                                              posterior_plt[[1]]),
+            ncol = 2,
+            nrow = 1, 
+            rel_widths = c(1, 1))
+  
+  if (arr_leg) {
+    scatterpie_tmp <- cowplot::plot_grid(plotlist = list(scatterpie_tmp,
+                                              legend_gtable),
+            ncol = 1,
+            nrow = 2, 
+            rel_heights = c(1, 0.15))
+  } 
+  
+  
+  return(scatterpie_tmp)
+}
+
+join_spatial_plots <- function(spatial_obj, ct) {
+  ###########################################################################################################
+  #### This functions takes in a feature to plot in 2 spatial slides and returns it with a unique legend ####
+  ###########################################################################################################
+  library(ggplot2)
+  library(ggpubr)
+  library(cowplot)
+  library(Seurat)
+  
+  # Set common legend theme
+  legend_theme <-  theme(legend.text = element_text(colour = "#3b3a39", size = 10),
+                       legend.title = element_text(colour = "#3b3a39", vjust = 1))
+  
+  orig_pt <- SpatialFeaturePlot(spatial_obj,
+                   features = ct,
+                   pt.size.factor = 1,
+                   alpha = c(0, 1)) + 
+    theme(plot.title = element_text(hjust = 0.5))
+  
+  ### Modify individual plots ###
+  orig_pt_ant <- orig_pt[[1]] +
+    cowplot::theme_map() + 
+    theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))+ 
+    scale_fill_gradientn(
+      # colours = colorRamps::matlab.like2(10),
+      colours = heat.colors(10, rev = TRUE),
+      limits = c(0, 1)) +
+    # Set aplha limit as if the upper limit was 1 so that the alpha proportions are plot independent
+    scale_alpha_continuous(range = c(0, max(orig_pt[[1]][["data"]][[ct]]))) +
+    labs(title = "", 
+       fill = "Proportion")
+  
+  orig_pt_post <- orig_pt[[2]] +
+    labs(title = "", fill = ct) +
+    cowplot::theme_map() + 
+    theme(plot.margin = unit(c(0, 0, 0, 0), "cm")) + 
+    scale_fill_gradientn(
+      # colours = colorRamps::matlab.like2(10),
+      colours = heat.colors(10, rev = TRUE),
+      limits = c(0, 1)) +
+    # Set aplha limit as if the upper limit was 1 so that the alpha proportions are plot independent
+    scale_alpha_continuous(range = c(0, max(orig_pt[[2]][["data"]][[ct]])))
+
+  return(list(orig_pt_ant, orig_pt_post))
+}
+
+```
+
+## Plots
+### Compositions
+In this sections we are going to build compositions of a cell's spatial location + marker gene for that cell type in the tissue + ISH image of that cell type
+
+#### Cell types of interest
+
+##### Hipoccampus cells
+Start by Making a dictionary of: cell type name in the data - cell type name in the plot - marker gene
+```{r}
+ct_dict <- list()
+ct_dict[["CA1sp"]][["gene"]] <- "Fibcd1"
+ct_dict[["CA1sp"]][["name"]] <- "CA1"
+ct_dict[["CA1sp"]][["plot_name"]] <- "Cornu Ammonis 1"
+
+ct_dict[["CA2sp.IG"]][["gene"]] <- "Ccdc3"
+ct_dict[["CA2sp.IG"]][["name"]] <- "CA2"
+ct_dict[["CA2sp.IG"]][["plot_name"]] <- "Cornu Ammonis 2 sp"
+
+ct_dict[["CA3sp"]][["gene"]] <- "Pvrl3"
+ct_dict[["CA3sp"]][["name"]] <- "CA3"
+ct_dict[["CA3sp"]][["plot_name"]] <- "Cornu Ammonis 3"
+
+ct_dict[["DG"]][["gene"]] <- "Prox1"
+ct_dict[["DG"]][["name"]] <- "DG"
+ct_dict[["DG"]][["plot_name"]] <- "Dentate Gyrus"
+```
+
+```{r}
+# Set common legend theme
+legend_theme <-  theme(legend.text = element_text(colour = "#3b3a39", size = 8),
+                     legend.title = element_text(colour = "#3b3a39", vjust = 1))
+
+join_spatial_plots_2 <- function(spatial_obj, feat) {
+  ###########################################################################################################
+  #### This functions takes in a feature to plot in 2 spatial slides and returns it with a unique legend ####
+  ###########################################################################################################
+  library(ggplot2)
+  library(ggpubr)
+  library(cowplot)
+  library(Seurat)
+  
+  # Set common legend theme
+  legend_theme <-  theme(legend.text = element_text(colour = "#3b3a39", size = 10),
+                       legend.title = element_text(colour = "#3b3a39", vjust = 1))
+  
+  orig_pt <- SpatialFeaturePlot(spatial_obj,
+                   features = feat,
+                   pt.size.factor = 1,
+                   alpha = c(0, 1)) + 
+    theme(plot.title = element_text(hjust = 0.5))
+  
+  ### Modify individual plots ###
+  orig_pt_ant <- orig_pt[[1]] +
+    cowplot::theme_map() + 
+    theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))
+  
+  # Check if its a cell type, if it is set limits 0-1
+  if (feat %in% colnames(spatial_obj@meta.data)) {
+    orig_pt_ant <- orig_pt_ant + 
+      scale_fill_gradientn(
+        colours = heat.colors(10, rev = TRUE),
+        limits = c(0, 1)) +
+      labs(title = "", 
+         fill = "Proportion")
+
+  } else {
+    # if its gene expression set common limit for both plots
+    up_lim <- max(spatial_obj@assays$SCT@data[rownames(spatial_obj@assays$SCT@data) == feat, ])    
+    
+    if(sum(spatial_obj@assays$SCT@data[feat, spatial_obj$slice == "Anterior"]) == 0) {
+      orig_pt_ant <- orig_pt_ant +
+          # geom_point(alpha = 0) +
+          scale_fill_gradientn(
+            colours = NA,
+            limits = c(0, up_lim)) +
+          scale_alpha(range = c(0, 0)) +
+          labs(title = "", 
+             fill = sprintf("%s\nExpression", feat))
+    } else {
+      orig_pt_ant <- orig_pt_ant + 
+          scale_fill_gradientn(
+            colours = colorRamps::matlab.like2(10),
+              limits = c(0, up_lim)) +
+          labs(title = "", 
+             fill = sprintf("%s\nExpression", feat))
+
+    }
+      }
+  
+  orig_pt_post <- orig_pt[[2]] +
+    labs(title = "", fill = nam) +
+    cowplot::theme_map() + 
+    theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))
+  
+  # Check if its a cell type, if it is set limits 0-1
+  if (feat %in% colnames(spatial_obj@meta.data)) {
+    orig_pt_post <- orig_pt_post + 
+      scale_fill_gradientn(
+        colours = heat.colors(10, rev = TRUE),
+        limits = c(0, 1))
+  } else {
+    up_lim <- max(spatial_obj@assays$SCT@data[rownames(spatial_obj@assays$SCT@data) == feat, ])
+    
+    if(sum(spatial_obj@assays$SCT@data[feat, spatial_obj$slice == "Posterior"]) == 0) {
+      orig_pt_post <- orig_pt_post +
+        geom_point(alpha = 0) +
+      scale_fill_gradientn(
+        colours = NA,
+        limits = c(0, up_lim)) +
+        scale_alpha(range = c(0, 0))
+    } else {
+      orig_pt_post <- orig_pt_post + 
+      scale_fill_gradientn(
+        colours = colorRamps::matlab.like2(10),
+        limits = c(0, up_lim))
+    }
+    
+  }
+
+  return(list(orig_pt_ant, orig_pt_post))
+
+}
+```
+
+We will use imager to work with images: importing + formating + plotting.
+```{r}
+ct <- "CA2sp.IG"
+ct_ls <- c("CA1sp", "CA2sp.IG", "CA3sp", "DG")
+plot_ls <- lapply(ct_ls, function(ct) {
+  feat <- ct_dict[[ct]][["gene"]] 
+  nam <- ct_dict[[ct]][["name"]]
+  
+  # If a gene doesn't exist add its row as all 0
+  if (!feat %in% rownames(brain@assays$SCT@data)) {
+    feat_mtrx <- Matrix::Matrix(0, nrow = 1, ncol = ncol(brain@assays$SCT@data), sparse = TRUE)
+    rownames(feat_mtrx) <- feat
+    brain@assays$SCT@var.features <- c(brain@assays$SCT@var.features, feat)
+    brain@assays$SCT@data <- rbind(brain@assays$SCT@data, feat_mtrx)
+  }
+  # Plot cell type
+  suppressMessages(ct_arr <- join_spatial_plots_2(spatial_obj = brain, feat = ct))
+  legend_ct <- get_legend(ct_arr[[1]] + legend_theme)
+  
+  # Plot gene marker for that cell type
+  suppressMessages(feat_arr <- join_spatial_plots_2(spatial_obj = brain, feat = feat))
+  legend_feat <- get_legend(feat_arr[[1]] + legend_theme)
+  
+  ### Load image to plot ###
+  fn_all <- list.files("analysis/mouse_brain/img")
+  fn_ls <- fn_all[grepl(pattern = paste0("^", nam), x = fn_all)]
+  
+  fn_anterior <- fn_ls[grepl(pattern = "anterior_crop", x = fn_ls)]
+  anterior_ish <- plot_image(img_path = sprintf("analysis/mouse_brain/img/%s", fn_anterior)) +
+    theme(plot.margin = unit(c(0, 0, 0, 0), "cm")) +
+    coord_fixed(ratio = 0.925, xlim = NULL, ylim = NULL, expand = TRUE, clip = "on")
+  
+  fn_posterior <- fn_ls[grepl(pattern = "posterior_crop", x = fn_ls)]
+  posterior_ish <- plot_image(img_path = sprintf("analysis/mouse_brain/img/%s", fn_posterior)) +
+    theme(plot.margin = unit(c(0, 0, 0, 0), "cm")) +
+    coord_fixed(ratio = 0.925, xlim = NULL, ylim = NULL, expand = TRUE, clip = "on")
+  
+  ct_plt <- cowplot::plot_grid(plotlist = list(ct_arr[[1]] + theme(legend.position = "none"),
+                                               ct_arr[[2]] + theme(legend.position = "none")),
+                               align = "vh",
+                               # axis = "trbl",
+                               ncol = 2,
+                               nrow = 1)
+  
+  feat_plt <- cowplot::plot_grid(plotlist = list(feat_arr[[1]] + theme(legend.position = "none"),
+                                               feat_arr[[2]] + theme(legend.position = "none")),
+                               align = "vh",
+                               # axis = "trbl",
+                               ncol = 2,
+                               nrow = 1)
+  ish_plt <- cowplot::plot_grid(plotlist = list(anterior_ish,
+                                               posterior_ish),
+                               align = "vh",
+                               # axis = "trbl",
+                               ncol = 2,
+                               nrow = 1)
+  
+  plt_arr <- cowplot::plot_grid(plotlist = list(ct_plt,
+                                                feat_plt,
+                                                NULL,
+                                                ish_plt),
+                                nrow = 4, 
+                                ncol = 1, 
+                                # align = "vh", 
+                                axis = "tblr",
+                                rel_heights = c(1, 1, 0.075, 1))
+  
+  leg_arr <- cowplot::plot_grid(plotlist = list(legend_ct, 
+                                                legend_feat, 
+                                                NULL),
+                                nrow = 3, 
+                                ncol = 1)
+  
+  final_arr <- cowplot::plot_grid(plotlist = list(plt_arr, leg_arr), 
+                                  nrow = 1, 
+                                  ncol = 2, 
+                                  rel_widths = c(1 ,0.2), 
+                                  axis = "trbl") %>% 
+    ggpubr::annotate_figure(p = .,
+                            top = ggpubr::text_grob(sprintf("%s", ct_dict[[ct]][["plot_name"]]), 
+                                                  face = "bold", 
+                                                  size = 20, vjust = 1))
+  
+  
+  #### Save plot ####
+  ggpubr::ggexport(plotlist = list(final_arr),
+                         filename = sprintf("analysis/mouse_brain/Fig_%s_arrange.pdf", nam), 
+                         width = 7.91, 
+                         height = 9.38, 
+                         res = 600)
+
+  return(final_arr + theme(plot.background = element_rect(fill = NA, colour = "black", size = 2)))
+})
+
+plot_ls
+```
+
+##### Join Hippocampus plots
+```{r}
+cowplot::plot_grid(plotlist = list(plot_ls[[1]], NULL, plot_ls[[2]],
+                                   NULL, NULL, NULL,
+                                   plot_ls[[3]], NULL, plot_ls[[4]]), 
+                   nrow = 3,
+                   ncol = 3,
+                   # align = "hv", 
+                   rel_widths = c(1, 0.1, 1),
+                   rel_heights = c(1, 0.1, 1),
+                   axis = "trbl") %>% 
+    ggpubr::ggexport(plotlist = list(.),
+                         filename =
+                       sprintf("%s/%s/Figure_ZZZ_hippocampus_arrange_%s_%s.pdf",
+                               an_mouse, plt_dir, id_comp, id_nmf), 
+                         width = 15, 
+                         height = 18, 
+                         res = 600)
+
+
+```
+
+
+#### Scatterpie spatial plots
+##### All cell types
+```{r}
+joint_scatterpie_fun(se_obj = brain, 
+                     cell_types_all = cell_types_metadata,
+                     img_path1 = "data/MusMusculus/sag_ant_1/spatial/tissue_lowres_image.png",
+                     img_path2 = "data/MusMusculus/sag_post_1/spatial/tissue_lowres_image.png",
+                     slice1 = "Anterior",
+                     slice2 = "Posterior",
+                     cell_types_interest = NULL,
+                     return_legend = TRUE,
+                     img_alpha = 1,
+                     scatterpie_alpha = 1,
+                     pie_scale = 0.2,
+                     col_df = col_df) %>%   
+  ggpubr::ggexport(plotlist = list(.), 
+                   filename = sprintf("%s/%s/Figure_YYY_spatial_scatterpie_allen_%s_%s.pdf",
+                                    an_mouse, plt_dir, id_comp, id_nmf), 
+                   width = 16, 
+                   height = 12, 
+                   res = 600)
+
+```
+
+##### Brain Layer cells
+Next we want to plot neuronal layers and subtypes in both anterior and posterior sections
+```{r eval = FALSE}
+cortex_layers <- c("L2.3.IT.Cdc14a", "L2.3.IT.Cxcl14", "L2.3.IT.Ndst4.Endou", "L2.3.IT.Otof", "L2.3.IT.Plch1", "L4.IT", "L4.5.IT", "L5.ET", "L5.IT", "L6.CT", "L6.IT", "L6b")
+
+joint_scatterpie_fun(se_obj = brain_mod,
+                     cell_types_all = cell_types_metadata,
+                     img_path1 = "data/MusMusculus/sag_ant_1/spatial/tissue_lowres_image.png",
+                     img_path2 = "data/MusMusculus/sag_post_1/spatial/tissue_lowres_image.png",
+                     slice1 = "Anterior",
+                     slice2 = "Posterior",
+                     cell_types_interest = cortex_layers,
+                     return_legend = TRUE,
+                     img_alpha = 1,
+                     scatterpie_alpha = 1,
+                     pie_scale = 0.2,
+                     col_df = col_df) %>%
+  ggpubr::ggexport(plotlist = list(.), 
+                   filename = sprintf("%s/cortex_spatial_scatterpie_allen_%s_%s.pdf",
+                                    an_mouse, id_comp, id_nmf), 
+                   width = 12, 
+                   height = 9, 
+                   res = 600)
+
+```
+
+##### General cortex
+Combine all L2/3 neurons
+```{r}
+brain_mod <- brain
+brain_mod@meta.data[["L2.3"]] <- rowSums(brain@meta.data[, c("L2.3.IT.Cdc14a", "L2.3.IT.Cxcl14", "L2.3.IT.Ndst4.Endou", "L2.3.IT.Otof", "L2.3.IT.Plch1")])
+brain_mod[["L2.3.IT.Cdc14a"]] <- NULL
+brain_mod[["L2.3.IT.Cxcl14"]] <- NULL
+brain_mod[["L2.3.IT.Ndst4.Endou"]] <- NULL
+brain_mod[["L2.3.IT.Otof"]] <- NULL
+brain_mod[["L2.3.IT.Plch1"]] <- NULL
+```
+
+Scatterpie plot with all the celltypes together
+```{r}
+cortex_layers_mod <- c("L2.3", "L4.IT", "L4.5.IT", "L5.ET", "L5.IT", "L6.CT", "L6.IT", "L6b")
+cell_types_metadata_mod <- c(cell_types_metadata[!cell_types_metadata %in% c("L2.3.IT.Cdc14a", "L2.3.IT.Cxcl14", "L2.3.IT.Ndst4.Endou", "L2.3.IT.Otof", "L2.3.IT.Plch1")], "L2.3")
+
+# general_cortex_plt <- joint_scatterpie_fun(se_obj = brain_mod,
+#                      cell_types_all = cell_types_metadata_mod,
+#                      img_path1 = "data/MusMusculus/sag_ant_1/spatial/tissue_lowres_image.png",
+#                      img_path2 = "data/MusMusculus/sag_post_1/spatial/tissue_lowres_image.png",
+#                      slice1 = "Anterior",
+#                      slice2 = "Posterior",
+#                      cell_types_interest = cortex_layers_mod,
+#                      return_legend = TRUE,
+#                      img_alpha = 1,
+#                      scatterpie_alpha = 1,
+#                      pie_scale = 0.2,
+#                      col_df = col_df)
+
+anterior_plt <- spatial_scatterpie(se_obj = brain_mod,
+                 cell_types_all = cell_types_metadata_mod,
+                 img_path = "data/MusMusculus/sag_ant_1/spatial/tissue_lowres_image.png",
+                 slice = "Anterior", 
+                 cell_types_interest = cortex_layers_mod, 
+                 return_legend = TRUE,
+                 img_alpha = 1,
+                 scatterpie_alpha = 1,
+                 pie_scale = 1,
+                 col_df = col_df)
+posterior_plt <- spatial_scatterpie(se_obj = brain_mod,
+                   cell_types_all = cell_types_metadata_mod,
+                   img_path = "data/MusMusculus/sag_post_1/spatial/tissue_lowres_image.png",
+                   slice = "Posterior", 
+                   cell_types_interest = cortex_layers_mod,
+                   return_legend = TRUE,
+                   img_alpha = 1,
+                   scatterpie_alpha = 1,
+                   pie_scale = 1,
+                   col_df = col_df)
+
+tmp_plt <- scatterpie_plot(se_obj = brain_mod,
+               cell_types_all = cell_types_metadata_mod,
+               slice = "Anterior",
+               scatterpie_alpha = 1, 
+               col_df = col_df) +
+           labs(fill = "") +
+           theme(legend.position = "bottom",
+                 legend.text = element_text(colour = "#3b3a39", size = 9),
+                 legend.title = element_text(colour = "#3b3a39", vjust = 1, hjust = 0.5),
+                 legend.key.size = unit(1, "line"), legend.margin = margin(0,0,0,0)) +
+           guides(fill = guide_legend(nrow = 5, override.aes = list(size = 0.1)))
+
+legend_gtable <- get_legend(tmp_plt)
+
+scatterpie_tmp <- cowplot::plot_grid(plotlist = list(anterior_plt[[1]] + theme(plot.margin = margin(0,0,0,0, "cm")),
+                                            posterior_plt[[1]] + theme(plot.margin = margin(0,0,0,0, "cm"))),
+          ncol = 2,
+          nrow = 1)
+
+
+general_cortex_plt <- cowplot::plot_grid(plotlist = list(scatterpie_tmp,
+                                          legend_gtable),
+        ncol = 1,
+        nrow = 2, 
+        rel_heights = c(1, 0.1)) +
+  coord_fixed() +
+  theme(plot.background = element_rect(fill = NA, colour = "black"))
+
+ggpubr::ggexport(plotlist = list(general_cortex_plt), 
+                   filename = sprintf("%s/general_cortex_spatial_scatterpie_allen_%s_%s.pdf",
+                                    an_mouse, id_comp, id_nmf), 
+                   width = 12, 
+                   height = 9, 
+                   res = 600)
+```
+
+Individual proportion plots
+```{reval = FALSE}
+cortex_arrange <- lapply(cortex_layers_mod, function(ct) {
+  # print(ct)
+  ct_ls <- join_spatial_plots(spatial_obj = brain_mod, ct = ct)
+  plt_tmp <- cowplot::plot_grid(plotlist = list(ct_ls[[1]] + theme(legend.position = "none"), 
+                                                ct_ls[[2]] + theme(legend.position = "none")), 
+                                nrow = 1, 
+                                ncol = 2, 
+                                align = "hv", 
+                                labels = ct_df[ct_df$ct_names == ct, "plt_names"]) + 
+    theme(plot.margin = unit(c(1,1,1,1), "line"))
+  
+  leg_grobtable <- get_legend(ct_ls[[1]])
+  plt_titleless <- cowplot::plot_grid(plotlist = list(plt_tmp, leg_grobtable), 
+                     ncol = 2, 
+                     nrow = 1, rel_widths = c(1, 0.2)) +
+    theme(plot.background = element_rect(fill = NA, colour ="black", size = 2))
+  
+  return(round_corners_grob(plt_titleless))
+})
+
+```
+
+###### Arrangement
+```{r}
+scatterpie_def <- round_corners_grob(scatterpie_tmp + theme(plot.background = element_rect(fill = NA, colour = "black", size = 2)))
+gen_cort_arr <- cowplot::plot_grid(plotlist = list(cortex_arrange[[1]], NULL, cortex_arrange[[2]], NULL, cortex_arrange[[3]],
+                                   NULL, NULL, NULL, NULL, NULL,
+                                   cortex_arrange[[4]], NULL, scatterpie_def, NULL, cortex_arrange[[5]],
+                                   NULL, NULL, NULL, NULL, NULL,
+                                   cortex_arrange[[6]], NULL, cortex_arrange[[7]], NULL, cortex_arrange[[8]]),
+                   nrow = 5,
+                   ncol = 5,
+                   rel_widths = c(1, 0.05, 1, 0.05, 1, 0.05),
+                   rel_heights = c(1, 0.05, 1, 0.05, 1, 0.05),
+                   labels = c("A", "", "B", "", "C",
+                              rep("", 5), 
+                              "D", "", "E", "", "F",
+                              rep("", 5), 
+                              "G", "", "H", "", "I"),
+                   label_x = 0.025,label_y = 0.98)
+
+ggpubr::ggexport(plotlist = list(gen_cort_arr),
+                 filename = sprintf("%s/%s/Figure_QQQ_general_cortex_%s_%s.pdf", 
+                                    an_mouse, plt_dir, id_comp, id_nmf),
+                 width = 18,
+                 height = 12,
+                 res = 600)
+```
+
+
+##### Hippocapmus
+```{r}
+hip_layers <- c("CA1sp", "CA1sp.SUB-sp.Kcnip1", "CA2sp.IG", "CA3sp", "DG")
+
+joint_scatterpie_fun(se_obj = brain, 
+                     cell_types_all = cell_types_metadata,
+                     img_path1 = "data/MusMusculus/sag_ant_1/spatial/tissue_lowres_image.png",
+                     img_path2 = "data/MusMusculus/sag_post_1/spatial/tissue_lowres_image.png",
+                     slice1 = "Anterior",
+                     slice2 = "Posterior",
+                     cell_types_interest = hip_layers,
+                     return_legend = TRUE,
+                     img_alpha = 1,
+                     scatterpie_alpha = 1,
+                     pie_scale = 0.2,
+                     col_df = col_df) %>%   
+  ggpubr::ggexport(plotlist = list(.), 
+                   filename = sprintf("%s/hippocampus_spatial_scatterpie_allen_%s_%s.pdf",
+                                    an_mouse, id_comp, id_nmf), 
+                   width = 12, 
+                   height = 9, 
+                   res = 600)
+
+```
+
+##### Layer 2 neurons
+```{r}
+l2_neurons <- c("L2.3.IT.Cdc14a", "L2.3.IT.Cxcl14", "L2.3.IT.Ndst4.Endou", "L2.3.IT.Otof", "L2.3.IT.Plch1")
+
+l2_scatterpie <- joint_scatterpie_fun(se_obj = brain, 
+                     cell_types_all = cell_types_metadata,
+                     img_path1 = "data/MusMusculus/sag_ant_1/spatial/tissue_lowres_image.png",
+                     img_path2 = "data/MusMusculus/sag_post_1/spatial/tissue_lowres_image.png",
+                     slice1 = "Anterior",
+                     slice2 = "Posterior",
+                     cell_types_interest = l2_neurons,
+                     return_legend = FALSE,
+                     img_alpha = 1,
+                     scatterpie_alpha = 1,
+                     pie_scale = 0.2,
+                     col_df = col_df, 
+                     arr_leg = FALSE) + 
+                  ggtitle("All L2/3 neuron subtypes") + 
+                  theme(
+                    plot.margin = margin(1.5, 0, 1.5, 0, "cm"), 
+                    plot.title = element_text(hjust = 0.5, size = 20, face = "bold")
+                    )
+
+cowplot::plot_grid(plotlist = list(l2_scatterpie))
+ggpubr::ggexport(plotlist = list(l2_scatterpie), 
+                 filename = sprintf("%s/layer2_spatial_scatterpie_allen_%s_%s.pdf",
+                                  an_mouse, id_comp, id_nmf), 
+                 width = 12, 
+                 height = 9, 
+                 res = 600)
+
+```
+
+###### Image composition
+Here we are going to do an image composition of the plots with ISH data
+```{r}
+l2_df <- data.frame(colnm = l2_neurons, 
+                    pltnm = c("L2/3 IT Cdc14a", "L2/3 IT Cxcl14", "L2/3 IT Ndst4 Endou", "L2/3 IT Otof", "L2/3 IT Plch1"))
+
+# ct <- "L2.3.IT.Cxcl14"
+l2_plots <- lapply(l2_neurons, function(ct) {
+  print(ct)
+  ct_scatterpie <- joint_scatterpie_fun(se_obj = brain, 
+                     cell_types_all = cell_types_metadata,
+                     img_path1 = "data/MusMusculus/sag_ant_1/spatial/tissue_lowres_image.png",
+                     img_path2 = "data/MusMusculus/sag_post_1/spatial/tissue_lowres_image.png",
+                     slice1 = "Anterior",
+                     slice2 = "Posterior",
+                     cell_types_interest = ct,
+                     return_legend = TRUE,
+                     img_alpha = 1,
+                     scatterpie_alpha = 1,
+                     pie_scale = 1,
+                     col_df = col_df, 
+                     arr_leg = FALSE) %>% 
+    ggpubr::annotate_figure(.,
+                top = ggpubr::text_grob(l2_df[l2_df$colnm == ct, "pltnm"], 
+                                        face = "bold", 
+                                        size = 14))
+
+  ish_path_ls <- list.files(path = sprintf("%s/img", an_mouse), 
+                       pattern = sprintf("%s.*ISH-crop_lowres.jpg",ct), 
+                       full.names = TRUE)
+  
+  ish_plot_ls <- lapply(ish_path_ls, function(path) {
+    plot_image(img_path = path)
+  })
+  
+  ish_arr <- cowplot::plot_grid(plotlist = ish_plot_ls, 
+                                align = "hv", 
+                                nrow = 1, 
+                                ncol = 2, 
+                                axis = "trlb")
+
+  exp_path_ls <- list.files(path = sprintf("%s/img", an_mouse), 
+                       pattern = sprintf("%s.*Exp-crop.jpg",ct), 
+                       full.names = TRUE)
+  
+  exp_plot_ls <- lapply(exp_path_ls, function(path) {
+    plot_image(img_path = path)
+  })
+  exp_arr <- cowplot::plot_grid(plotlist = exp_plot_ls, 
+                                align = "hv", 
+                                nrow = 1, 
+                                ncol = 2, 
+                                axis = "trlb")
+  
+  tmp_arr <- cowplot::plot_grid(plotlist = list(ct_scatterpie, exp_arr, ish_arr),
+                     nrow = 3, 
+                     ncol = 1, 
+                     align = "hv") + 
+    theme(panel.border = element_rect(color = "black", fill = NA, size = 1))
+  return(tmp_arr)
+})
+
+
+saveRDS(l2_plots, sprintf("%s/%s/l2_image_plots_%s_%s.RDS", an_mouse, robj_dir, id_comp, id_nmf))
+l2_plots <- readRDS(sprintf("%s/%s/l2_image_plots_%s_%s.RDS", an_mouse, robj_dir, id_comp, id_nmf))
+
+bottom_row <- cowplot::plot_grid(plotlist = list(l2_plots[[1]],
+                                                 NULL, 
+                                                 l2_plots[[2]],
+                                                 NULL, 
+                                                 l2_plots[[3]]),
+                   ncol = 5,
+                   nrow = 1,
+                   rel_widths = c(1, 0.68, 1, 0.68, 1),
+                   # align = "hv",
+                   axis = "trbl", 
+                   labels = c("D", "", "E", "", "F"))
+
+top_row <- cowplot::plot_grid(plotlist = list(l2_plots[[4]],
+                                              NULL,
+                                              l2_scatterpie + theme(plot.background = element_rect(colour = "black", fill=NA, size=2)),
+                                              NULL,
+                                              l2_plots[[5]]),
+                   ncol = 5,
+                   nrow = 1,
+                   rel_widths = c(0.5, 0.1, 1, 0.1, 0.5),
+                   # align = "hv",
+                   axis = "trbl", 
+                   labels = c("A", "", "B", "", "C"))
+
+l2_def <- cowplot::plot_grid(plotlist = list(NULL, NULL, NULL, 
+                                   NULL, top_row, NULL, 
+                                   NULL, NULL, NULL,
+                                   NULL, bottom_row, NULL,
+                                   NULL, NULL, NULL), 
+                   ncol = 3, 
+                   nrow = 5, 
+                   rel_heights = c(0.05, 1, 0.1, 1, 0.05),
+                   rel_widths = c(0.05, 1, 0.05))
+
+mouse_plt_dir <- sprintf("%s/%s", an_mouse, plt_dir); 
+dir.create(path = mouse_plt_dir, showWarnings = FALSE, recursive = TRUE)
+ggpubr::ggexport(plotlist = list(l2_def),
+                 filename = sprintf("%s/Figure_layer2_spatial_scatterpie_allen_%s_%s.pdf",
+                                  mouse_plt_dir, id_comp, id_nmf), 
+                 width = 18, 
+                 height = 12)
+```
+
+
+### Min contribution evaluation
+```{r}
+min_cont_df <- readRDS(file = sprintf("%s/%s/min_cont_df_%s.RDS", an_mouse, robj_dir, id_nmf))
+min_cont_long_df <- min_cont_df %>% tidyr::pivot_longer(cols = c("Accuracy", 
+                                             "Specificity", "Sensitivity", "Precision", 
+                                             "F1 score"),
+                                    names_to = "Metric", 
+                                    values_to = "Value") %>% 
+  mutate(min_cont = factor(x = min_cont, 
+                           levels = as.character(sort(as.numeric(unique(min_cont))))))
+```
+
+#### Visualization
+Visualize classification metrics
+```{r}
+my_theme <- theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+
+best_min_cont <- min_cont_df[min_cont_df$`F1 score` == max(min_cont_df$`F1 score`), "min_cont"]
+p1 <- min_cont_long_df %>%
+  mutate(best = if_else(min_cont == best_min_cont, TRUE, FALSE)) %>% 
+  ggplot() +
+  geom_point(aes(x = min_cont, y = Value, colour = best)) +
+  facet_wrap(Metric~.) +
+  ylim(0, 1) +
+  theme_classic() +
+  my_theme +
+  theme(legend.position = "none") +
+  labs(x = "min_cont", y = "", colour = "") +
+  scale_color_manual(values = c(col_high, col_low))
+
+p1
+```
+
+Visualize Jesnen-Shannon divergence distance
+```{r}
+p2 <- min_cont_df %>% 
+  ggplot(aes(x = reorder(min_cont, -JSD_50), y = JSD_50)) +
+  geom_errorbar(aes(ymin = JSD_25, ymax = JSD_75), width = .3, size = 1) +
+  geom_point(aes(size = time_mins)) +
+  my_theme +
+  labs(x = "", y = "")
+
+p2
+
+
+p3 <- tech_raw_ds %>%
+tidyr::pivot_longer(cols = c("JSD_25", "JSD_50", "JSD_75"),
+                names_to = "quantile", values_to = "value") %>%
+dplyr::mutate(
+  value = as.numeric(value),
+  tech = factor(tech, levels = levels(reorder(tech_proc$tech, -tech_proc$JSD_50)))) %>% 
+ggplot(aes(x = tech, y = value, color = quantile)) +
+geom_point() +
+my_theme
+p3
+
+```
+
+# Least-squares residuals plot
+We want to check the least square residuals and see if we are better at predicting in some regions
+```{r}
+brain[["res_ss"]] <- decon_mtrx[, "res_ss"]
+SpatialFeaturePlot(object = brain, features = "res_ss")
+which(is.na(decon_mtrx[, "res_ss"]))
+```
+

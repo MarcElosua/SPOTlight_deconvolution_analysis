@@ -1,0 +1,74 @@
+---
+title: "allen_70k_tsne"
+author: "Marc Elosua-Bayes"
+date: "5/25/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+In this R markdown document we are going to plot the 2D t-SNE embedding of the 76k Mouse brain dataset. The embeddings and data come from the Allen Brain Institure and can be downloaded here: https://portal.brain-map.org/atlases-and-data/rnaseq
+
+## Load libraries
+```{r}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+```
+
+## Load paths
+```{r}
+tech <- "sc"
+tissue <- "allen_ref_70k"
+dwn_smplng <- "both"
+org <- "mm"
+source("misc/paths_vrs.R")
+seed_id <- 123
+set.seed(seed_id)
+```
+
+## Load data
+```{r}
+allen_ref_70k <- readRDS(file = "data/MusMusculus/allen_reference/allen_ref_70k_processed.RDS")
+```
+
+## Visualization
+Add TSNE 2D embedding
+```{r eval = FALSE}
+embed_tsne <- readr::read_csv(file = "data/MusMusculus/allen_reference/2d-coordinates/2d_coordinates.csv")
+
+tsne_ds <- allen_ref_70k@meta.data %>% 
+  tibble::rownames_to_column("sample_name") %>% 
+  right_join(embed_tsne, by = "sample_name")
+
+UMAP_allen_70k <- ggplot(tsne_ds, aes(x = tsne_1,
+                    y = tsne_2,
+                    colour = subclass_label)) +
+  geom_point(alpha = 1, size = 0.7) +
+  theme_classic() +
+  labs(
+    title = "Allen Institute 76k cells mouse brain",
+    colour = "",
+    x = "TSNE 1",
+    y = "TSNE 2") +
+  guides(colour = guide_legend(override.aes = list(size = 4))) +
+  theme(
+    axis.title = element_text(size = 15),
+    plot.title =  element_text(hjust = 0.5, size = 20),
+    axis.text = element_text(size = 12),
+    legend.text = element_text(size = 15)
+  ) +
+  scale_color_manual(values = col_vector) +
+  guides(colour = guide_legend(ncol = 1, override.aes = list(size = 7)))
+
+
+ggpubr::ggexport(UMAP_allen_70k, 
+               filename = sprintf("%s/%s/Supplementary_Figure_HHH_TSNE_allen_70k.pdf",
+                                  an_mouse, plt_dir),
+               width = 24,
+               height = 18)
+```
+

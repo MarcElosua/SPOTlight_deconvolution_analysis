@@ -1,0 +1,338 @@
+---
+title: "Replicate brain analysis"
+author: "Marc Elosua-Bayes"
+date: "4/27/2020"
+output: html_document
+---
+
+## Introduction
+In this Rmarkdown document we will replicate the spot deconvolution analysis on replicate mouse brain anterior and posterios sections. We're going to use the same model we trained before and go straight to perform the deconvolution.
+The spatial data canbe downloaded from the 10X website: [anterior](https://support.10xgenomics.com/spatial-gene-expression/datasets/1.0.0/V1_Mouse_Brain_Sagittal_Anterior_Section_2) and [posterior](https://support.10xgenomics.com/spatial-gene-expression/datasets/1.0.0/V1_Mouse_Brain_Sagittal_Posterior_Section_2).
+
+## Libraries
+```{r}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(purrr)
+library(SPOTlight)
+library(NMF)
+library(nnls)
+```
+
+## Paths
+```{r}
+tech <- "sc"
+tissue <- "allen_ref_70k"
+dwn_smplng <- "both"
+org <- "mm"
+source("misc/paths_vrs.R")
+seed_id <- 123
+set.seed(seed_id)
+```
+
+## Set common parameters
+```{r}
+clust_vr <- "subclass_label"
+cl_n <- 100
+method <- "nsNMF"
+transf <- "uv"
+hvg <- 3000
+FC <- 1
+pct1 <- 0.9
+date <- Sys.Date()
+
+id_nmf <- sprintf("cln-%s_transf-%s_method-%s_hvg-%s_FC-%s_pct1-%s_seed-%s", 
+                  cl_n, transf, method, hvg, FC, pct1, seed_id)
+data_dir <- "data/MusMusculus/allen_reference"
+options(stringsAsFactors = FALSE)
+
+
+library(RColorBrewer)
+n <- 60
+qual_col_pals <- brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector <- unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+```
+
+```{r}
+ct_names <- c("Astro", "CA1sp", "CA1sp.SUB-sp.Kcnip1", "CA2sp.IG", "CA3sp", 
+              "Car3", "CR", "DG", "Doublet", "Endo", "IT.RHP.Dcn", 
+              "L2.3.IT.Cdc14a", "L2.3.IT.Cxcl14", "L2.3.IT.Ndst4.Endou", 
+              "L2.3.IT.Otof", "L2.3.IT.Plch1", "L4.IT", "L4.5.IT", "L5.ET", 
+              "L5.IT", "L6.CT" ,"L6.IT", "L6b", "Lamp5", "Lamp5.Lhx6", 
+              "Low.Quality", "Ly6g6e", "Macrophage", "Meis2", "NP", "Oligo",
+              "PIR.Six3", "POST-PRE-PAR.Ptgfr", "Pvalb", "RHP.Cplx3", 
+              "RSP_ACA.IT.Scnn1a", "RSP.ACA.L4.5.IT", "Serpinf1", "SMC", "Sncg",
+              "Sncg.Ndnf.HPF", "Sst", "Sst.Chodl", "SUB-Sp.Ndst4", "Unknown", 
+              "Vip", "VLMC")
+
+plt_names <- c("Astrocytes", "CA1sp", "CA1sp/SUB-sp Kcnip1", "CA2sp/IG", "CA3sp",
+               "Car3", "Cajal-Retzius", "DG", "Doublet", "Endothelium", 
+               "IT RHP Dcn", "L2/3 IT Cdc14a", "L2/3 IT Cxcl14", 
+               "L2/3 IT Ndst4 Endou", "L2/3 IT Otof", "L2/3 IT Plch1", "L4 IT", 
+               "L4/5 IT", "L5 ET", "L5 IT", "L6 CT" ,"L6 IT", "L6b", "Lamp5", 
+               "Lamp5 Lhx6", "Low quality", "Ly6g6e", "Macrophage", "Meis2", 
+               "Neural Progenitor", "Oligodendrocyte", "PIR Six3", 
+               "POST-PRE-PAR Ptgfr", "Pvalb", "RHP Cplx3", "RSP/ACA IT Scnn1a", 
+               "RSP/ACA L4/5 IT", "Serpinf1", "Smooth Muscle Cells", "Sncg", 
+               "Sncg/Ndnf HPF", "Sst", "Sst Chodl", "SUB-Sp Ndst4", "Unknown", 
+               "Vip", "VLMC")
+
+ct_df <- data.frame(ct_names, plt_names)
+
+```
+
+### Load data
+We will start by loading the spatial data
+Once the file is downloaded be sure to change the filename of *V1_Mouse_Brain_Sagittal_Anterior_filtered_feature_bc_matrix.h5* to *filtered_feature_bc_matrix.h5*, the latter is the name spaceranger outputs this file and it looks for it, also need to untar the compressed files .
+
+#### Anterior slice
+```{r}
+anterior <- Seurat::Load10X_Spatial(data.dir = "data/MusMusculus/sag_ant_2",
+                            assay = "Spatial",
+                            slice = "Anterior",
+                            filter.matrix = TRUE,
+                            to.upper = FALSE)
+
+anterior$slice <- "Anterior"
+anterior <- Seurat::SCTransform(anterior, assay = "Spatial", verbose = TRUE)
+```
+
+
+#### Posterior slice
+```{r}
+posterior <- Seurat::Load10X_Spatial(data.dir = "data/MusMusculus/sag_post_2",
+                            assay = "Spatial",
+                            slice = "Posterior",
+                            filter.matrix = TRUE,
+                            to.upper = FALSE)
+
+posterior$slice <- "Posterior"
+posterior <- Seurat::SCTransform(posterior, assay = "Spatial", verbose = TRUE)
+```
+
+#### Merging slices
+```{r}
+brain <- merge(anterior, posterior)
+
+Seurat::DefaultAssay(brain) <- "SCT"
+Seurat::VariableFeatures(brain) <- c(Seurat::VariableFeatures(anterior),
+                                           Seurat::VariableFeatures(posterior))
+brain <- Seurat::RunPCA(brain, verbose = FALSE)
+Seurat::ElbowPlot(object = brain, ndims = 50)
+brain <- Seurat::FindNeighbors(brain, dims = 1:40)
+brain <- Seurat::FindClusters(brain, verbose = FALSE)
+brain <- Seurat::RunUMAP(brain, dims = 1:40)
+
+saveRDS(object = brain,
+        file = sprintf("%s/%s/brain2_processed.RDS", an_mouse, robj_dir))
+brain <- readRDS(sprintf("%s/%s/brain2_processed.RDS", an_mouse, robj_dir))
+
+SpatialFeaturePlot(brain, features = "Fibcd1", alpha = c(0,0))
+```
+
+### Load NMF model
+We are going to load the previously trained NMF model since the training data is the same:
+```{r}
+nmf_mod_ls <- readRDS(file = sprintf("nmf_mod_ls_%s_%s_new.RDS", id_comp, id_nmf))
+nmf_mod <- nmf_mod_ls[[1]]
+```
+
+Extract matrices form the model:
+```{r}
+# get matrix W
+w <- basis(nmf_mod)
+dim(w)
+
+# get matrix H
+h <- coef(nmf_mod)
+dim(h)
+```
+
+Look at how unique the topic profiles are:
+```{r}
+topic_profile_plts <- dot_plot_profiles_fun(h = h,
+                      train_cell_clust = nmf_mod_ls[[2]], 
+                      clust_vr = clust_vr)
+topic_profile_plts[[2]] + theme(axis.text.x = element_text(angle = 90))
+```
+
+### Spot Deconvolution
+```{r}
+# Extract count matrix
+spot_counts <- brain@assays$Spatial@counts
+
+# Subset to genes used to train the model
+spot_counts <- spot_counts[rownames(spot_counts) %in% rownames(w), ]
+```
+
+#### Predict mixture composition
+Run test spots through the basis to get the pertinent coefficients. To do this for every spot we are going to set up a system of linear equations where we need to find the coefficient, we will use non-negative least squares to determine the best coefficient fit. 
+```{r}
+ct_topic_profiles <- topic_profile_per_cluster_nmf(h = h,
+                              train_cell_clust = nmf_mod_ls[[2]],
+                              clust_vr = clust_vr)
+
+decon_mtrx <- mixture_deconvolution_nmf(nmf_mod = nmf_mod,
+                          mixture_transcriptome = spot_counts,
+                          transf = transf,
+                          reference_profiles = ct_topic_profiles, 
+                          min_cont = 0.09, 
+                          clust_vr = clust_vr)
+saveRDS(decon_mtrx,
+        sprintf("decon_mtrx_%s_%s_replicate.RDS", id_comp, id_nmf))
+
+# decon_mtrx <- readRDS(file = sprintf("decon_mtrx_%s_%s_replicate.RDS", id_comp, id_nmf))
+
+cell_types <- colnames(decon_mtrx)[which(colnames(decon_mtrx) != "res_ss")]
+```
+
+Add deconvolution matrix to Seurat object
+```{r}
+brain@meta.data <- cbind(brain@meta.data, decon_mtrx)
+```
+
+### Spatial location
+```{r}
+join_spatial_plots <- function(spatial_obj, ct) {
+  ###########################################################################################################
+  #### This functions takes in a feature to plot in 2 spatial slides and returns it with a unique legend ####
+  ###########################################################################################################
+  library(ggplot2)
+  library(ggpubr)
+  library(cowplot)
+  library(Seurat)
+  
+  # Set common legend theme
+  legend_theme <-  theme(legend.text = element_text(colour = "#3b3a39", size = 10),
+                       legend.title = element_text(colour = "#3b3a39", vjust = 1))
+  
+  orig_pt <- SpatialFeaturePlot(spatial_obj,
+                   features = ct,
+                   pt.size.factor = 1,
+                   alpha = c(0, 1)) + 
+    theme(plot.title = element_text(hjust = 0.5))
+  
+  ### Modify individual plots ###
+  orig_pt_ant <- orig_pt[[1]] +
+    cowplot::theme_map() + 
+    theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))+ 
+    scale_fill_gradientn(
+      # colours = colorRamps::matlab.like2(10),
+      colours = heat.colors(10, rev = TRUE),
+      limits = c(0, 1)) +
+    labs(title = "", 
+       fill = "Proportion")
+  
+  orig_pt_post <- orig_pt[[2]] +
+    labs(title = "", fill = ct) +
+    cowplot::theme_map() + 
+    theme(plot.margin = unit(c(0, 0, 0, 0), "cm")) + 
+    scale_fill_gradientn(
+      # colours = colorRamps::matlab.like2(10),
+      colours = heat.colors(10, rev = TRUE),
+      limits = c(0, 1))
+
+  return(list(orig_pt_ant, orig_pt_post))
+}
+```
+
+Lastly we will take a look at how the cell types are predicted to be spatially distributed.
+```{r}
+ct_arrange <- lapply(cell_types, function(ct) {
+  
+  ct_ls <- join_spatial_plots(spatial_obj = brain, 
+                              ct = ct)
+  plt_tmp <- cowplot::plot_grid(plotlist = list(ct_ls[[1]] + theme(legend.position = "none"), 
+                                                ct_ls[[2]] + theme(legend.position = "none")), 
+                                nrow = 1, 
+                                ncol = 2, 
+                                align = "hv", 
+                                labels = ct_df[ct_df$ct_names == ct, "plt_names"]) + 
+    theme(plot.margin = unit(c(1,1,1,1), "line"))
+  
+  leg_grobtable <- get_legend(ct_ls[[1]])
+  plt_titleless <- cowplot::plot_grid(plotlist = list(plt_tmp, leg_grobtable), 
+                     ncol = 2, 
+                     nrow = 1, rel_widths = c(1, 0.2))
+}) %>% 
+  ggarrange(plotlist = ., ncol = 4, nrow = 5, align = "hv")
+
+ggpubr::ggexport(plotlist = ct_arrange,
+                  filename = sprintf("%s/%s/cell_type_brain_merge1_nmf_70k_%s_replicate.pdf", an_mouse, plt_dir, id_nmf),
+                  width = 24, 
+                  height = 18, 
+                  res = 600)
+
+
+```
+
+#### Supplementary Figure
+```{r}
+join_spatial_plots <- function(spatial_obj, ct) {
+  ###########################################################################################################
+  #### This functions takes in a feature to plot in 2 spatial slides and returns it with a unique legend ####
+  ###########################################################################################################
+  library(ggplot2)
+  library(ggpubr)
+  library(cowplot)
+  library(Seurat)
+  
+  # Set common legend theme
+  legend_theme <-  theme(legend.text = element_text(colour = "#3b3a39", size = 10),
+                       legend.title = element_text(colour = "#3b3a39", vjust = 1))
+  
+  orig_pt <- SpatialFeaturePlot(spatial_obj,
+                   features = ct,
+                   pt.size.factor = 1,
+                   alpha = c(0, 1)) + 
+    theme(plot.title = element_text(hjust = 0.5))
+  
+  ### Modify individual plots ###
+  orig_pt_ant <- orig_pt[[1]] +
+    cowplot::theme_map() + 
+    theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))+ 
+    scale_fill_gradientn(
+      colours = colorRamps::matlab.like2(10),
+      limits = c(0, 1)) +
+    labs(title = "", 
+       fill = "Proportion")
+  
+  orig_pt_post <- orig_pt[[2]] +
+    labs(title = "", fill = ct) +
+    cowplot::theme_map() + 
+    theme(plot.margin = unit(c(0, 0, 0, 0), "cm")) + 
+    scale_fill_gradientn(
+      colours = colorRamps::matlab.like2(10),
+      limits = c(0, 1))
+
+  return(list(orig_pt_ant, orig_pt_post))
+}
+```
+
+```{r}
+ct_arrange <- lapply(cell_types, function(ct) {
+  
+  ct_ls <- join_spatial_plots(spatial_obj = brain, ct = ct)
+  plt_tmp <- cowplot::plot_grid(plotlist = list(ct_ls[[1]] + theme(legend.position = "none"), 
+                                                ct_ls[[2]] + theme(legend.position = "none")), 
+                                nrow = 1, 
+                                ncol = 2, 
+                                align = "hv", 
+                                labels = ct_df[ct_df$ct_names == ct, "plt_names"]) + 
+    theme(plot.margin = unit(c(1,1,1,1), "line"))
+  
+  leg_grobtable <- get_legend(ct_ls[[1]])
+  plt_titleless <- cowplot::plot_grid(plotlist = list(plt_tmp, leg_grobtable), 
+                     ncol = 2, 
+                     nrow = 1, rel_widths = c(1, 0.2))
+}) %>% 
+  ggarrange(plotlist = ., ncol = 4, nrow = 5, align = "hv")
+
+ggpubr::ggexport(plotlist = ct_arrange,
+                   filename = sprintf("%s/%s/Supplementary_Figure_AAA2_replicate_all_cell_types_grid_%s_%s.pdf", 
+                                 an_mouse, plt_dir, id_comp, id_nmf), 
+                   width = 24, 
+                   height = 18, 
+                 res = 600)
+```
