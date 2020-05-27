@@ -25,5 +25,17 @@ CRAN:
 * [NMF 0.22.0](https://cran.r-project.org/web/packages/NMF/index.html)
 * [Seurat 3.1.4.9903](https://satijalab.org/seurat/v3.1/spatial_vignette.html)
 
+## Docker environments
+Docker environments with all the pertinent dependencies are available at dockerhub.
+To download the R environment image
+
+    # R environment
+    docker pull marcelosua/spotlight_env_r:latest
+
+To download the R studio image
+
+    # Rstudio environment
+    docker pull marcelosua/spotlight_env_rstudio:latest
+
 ## File system
 This repository contains 3 main analysis directories, each corresponding to the 3 main analysis of the paper. Scripts within each folder are numbered in the order they are to be run.
