@@ -239,30 +239,65 @@ join_spatial_plots <- function(spatial_obj, ct) {
 
 Lastly we will take a look at how the cell types are predicted to be spatially distributed.
 ```{r}
+# ct_arrange <- lapply(cell_types, function(ct) {
+#   
+#   ct_ls <- join_spatial_plots(spatial_obj = brain, 
+#                               ct = ct)
+#   plt_tmp <- cowplot::plot_grid(plotlist = list(ct_ls[[1]] + theme(legend.position = "none"), 
+#                                                 ct_ls[[2]] + theme(legend.position = "none")), 
+#                                 nrow = 1, 
+#                                 ncol = 2, 
+#                                 align = "hv", 
+#                                 labels = ct_df[ct_df$ct_names == ct, "plt_names"]) + 
+#     theme(plot.margin = unit(c(0.2,0.2,0.2,0.2), "line"))
+#   
+#   leg_grobtable <- get_legend(ct_ls[[1]])
+#   plt_titleless <- cowplot::plot_grid(plotlist = list(plt_tmp, leg_grobtable), 
+#                      ncol = 2, 
+#                      nrow = 1, rel_widths = c(1, 0.2))
+# })
+
 ct_arrange <- lapply(cell_types, function(ct) {
   
-  ct_ls <- join_spatial_plots(spatial_obj = brain, 
-                              ct = ct)
+  ct_ls <- join_spatial_plots(spatial_obj = brain, ct = ct)
   plt_tmp <- cowplot::plot_grid(plotlist = list(ct_ls[[1]] + theme(legend.position = "none"), 
                                                 ct_ls[[2]] + theme(legend.position = "none")), 
                                 nrow = 1, 
                                 ncol = 2, 
-                                align = "hv", 
-                                labels = ct_df[ct_df$ct_names == ct, "plt_names"]) + 
-    theme(plot.margin = unit(c(1,1,1,1), "line"))
+                                align = "hv",
+                                labels = ct_df[ct_df$ct_names == ct, "plt_names"], label_size = 10
+                                ) + 
+    # theme(plot.margin = unit(c(1,1,1,1), "line"))
+    theme(plot.margin = unit(c(0.2,0.2,0.2,0.2), "line"))
   
   leg_grobtable <- get_legend(ct_ls[[1]])
-  plt_titleless <- cowplot::plot_grid(plotlist = list(plt_tmp, leg_grobtable), 
-                     ncol = 2, 
-                     nrow = 1, rel_widths = c(1, 0.2))
+  plt_titleless <- cowplot::plot_grid(plotlist = list(plt_tmp, leg_grobtable),
+                     ncol = 2,
+                     nrow = 1, rel_widths = c(1, 0.1))
+  return(plt_tmp)
 }) %>% 
-  ggarrange(plotlist = ., ncol = 4, nrow = 5, align = "hv")
+  ggarrange(plotlist = ., ncol = 6, nrow = 9, align = "hv")
 
-ggpubr::ggexport(plotlist = ct_arrange,
-                  filename = sprintf("%s/%s/cell_type_brain_merge1_nmf_70k_%s_replicate.pdf", an_mouse, plt_dir, id_nmf),
-                  width = 24, 
-                  height = 18, 
-                  res = 600)
+# ggpubr::ggarrange(plotlist = ct_arrange, ncol = 7, nrow = 7, align = "hv") %>% 
+#   ggpubr::ggexport(plotlist = list(.),
+#                 filename = sprintf("%s/%s/cell_type_brain_merge1_nmf_70k_%s_replicate.pdf", an_mouse, plt_dir, id_nmf),
+#                 width = 24, 
+#                 height = 24, 
+#                 res = 600)
+
+ggpubr::ggexport(plotlist = list(ct_arrange),
+                 filename = sprintf("%s/%s/Supplementary_Figure_AAA2_all_cell_types_grid_%s_%s_replicate.pdf", 
+                               an_mouse, plt_dir, id_comp, id_nmf), 
+                 width = 24,
+                 height = 24,
+                 res = 600)
+
+ggpubr::ggexport(plotlist = list(ct_arrange),
+                 filename = sprintf("%s/%s/Supplementary_Figure_AAA2_all_cell_types_grid_%s_%s_replicates.jpeg",
+                               an_mouse, plt_dir, id_comp, id_nmf),
+                 width = 5000,
+                 height = 4500,
+                 res = 300)
 
 
 ```
@@ -326,13 +361,13 @@ ct_arrange <- lapply(cell_types, function(ct) {
   plt_titleless <- cowplot::plot_grid(plotlist = list(plt_tmp, leg_grobtable), 
                      ncol = 2, 
                      nrow = 1, rel_widths = c(1, 0.2))
-}) %>% 
-  ggarrange(plotlist = ., ncol = 4, nrow = 5, align = "hv")
-
-ggpubr::ggexport(plotlist = ct_arrange,
+})
+  
+ggpubr::ggarrange(plotlist = ct_arrange, ncol = 7, nrow = 7, align = "hv") %>% 
+  ggpubr::ggexport(plotlist = .,
                    filename = sprintf("%s/%s/Supplementary_Figure_AAA2_replicate_all_cell_types_grid_%s_%s.pdf", 
                                  an_mouse, plt_dir, id_comp, id_nmf), 
-                   width = 24, 
-                   height = 18, 
-                 res = 600)
+                   width = 24,
+                   height = 20,
+                   res = 600)
 ```

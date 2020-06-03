@@ -37,7 +37,7 @@ allen_ref_70k <- readRDS(file = "data/MusMusculus/allen_reference/allen_ref_70k_
 
 ## Visualization
 Add TSNE 2D embedding
-```{r eval = FALSE}
+```{r}
 embed_tsne <- readr::read_csv(file = "data/MusMusculus/allen_reference/2d-coordinates/2d_coordinates.csv")
 
 tsne_ds <- allen_ref_70k@meta.data %>% 
@@ -59,7 +59,7 @@ UMAP_allen_70k <- ggplot(tsne_ds, aes(x = tsne_1,
     axis.title = element_text(size = 15),
     plot.title =  element_text(hjust = 0.5, size = 20),
     axis.text = element_text(size = 12),
-    legend.text = element_text(size = 15)
+    legend.text = element_text(size = 12)
   ) +
   scale_color_manual(values = col_vector) +
   guides(colour = guide_legend(ncol = 1, override.aes = list(size = 7)))
@@ -70,5 +70,13 @@ ggpubr::ggexport(UMAP_allen_70k,
                                   an_mouse, plt_dir),
                width = 24,
                height = 18)
+
+ggpubr::ggexport(UMAP_allen_70k, 
+               filename = sprintf("%s/%s/Supplementary_Figure_HHH_TSNE_allen_70k.jpeg",
+                                  an_mouse, plt_dir),
+               width = 5500,
+               height = 4500,
+               res = 300)
+
 ```
 

@@ -79,9 +79,7 @@ Join the data so its easier to work with
 ```{r}
 cell_types <- colnames(decon_mtrx)[which(colnames(decon_mtrx) != "res_ss")]
 
-decon_mtrx_prop <- round(decon_mtrx[, cell_types] / rowSums(decon_mtrx[, cell_types]), 4)
-decon_mtrx_prop[is.na(decon_mtrx_prop)] <- 0
-brain@meta.data <- cbind(brain@meta.data, decon_mtrx_prop)
+brain@meta.data <- cbind(brain@meta.data, decon_mtrx)
 cell_types_metadata <- colnames(brain@meta.data)[colnames(brain@meta.data) %in% cell_types]
 ```
 
@@ -229,27 +227,47 @@ ct_arrange <- lapply(cell_types, function(ct) {
                                                 ct_ls[[2]] + theme(legend.position = "none")), 
                                 nrow = 1, 
                                 ncol = 2, 
-                                align = "hv", 
-                                labels = ct_df[ct_df$ct_names == ct, "plt_names"]) + 
-    theme(plot.margin = unit(c(1,1,1,1), "line"))
+                                align = "hv",
+                                labels = ct_df[ct_df$ct_names == ct, "plt_names"], label_size = 10
+                                ) + 
+    # theme(plot.margin = unit(c(1,1,1,1), "line"))
+    theme(plot.margin = unit(c(0.2,0.2,0.2,0.2), "line"))
   
   leg_grobtable <- get_legend(ct_ls[[1]])
-  plt_titleless <- cowplot::plot_grid(plotlist = list(plt_tmp, leg_grobtable), 
-                     ncol = 2, 
-                     nrow = 1, rel_widths = c(1, 0.2))
+  plt_titleless <- cowplot::plot_grid(plotlist = list(plt_tmp, leg_grobtable),
+                     ncol = 2,
+                     nrow = 1, rel_widths = c(1, 0.1))
+  return(plt_tmp)
 }) %>% 
-  ggarrange(plotlist = ., ncol = 4, nrow = 5, align = "hv")
+  ggarrange(plotlist = ., ncol = 6, nrow = 9, align = "hv")
 
-ggpubr::ggexport(plotlist = ct_arrange,
-                   filename = sprintf("%s/%s/Supplementary_Figure_AAA_all_cell_types_grid_%s_%s.pdf", 
-                                 an_mouse, plt_dir, id_comp, id_nmf), 
-                   width = 24, 
-                   height = 18, 
+# ggsave(plot = patchwork::wrap_plots(ct_arrange), 
+#        device = cairo_pdf,
+#        file = "a4_output.pdf", 
+#        # width = 210, 
+#        # height = 297, 
+#        width = 420,
+#        height = 600,
+#        units = "mm")
+
+ggpubr::ggexport(plotlist = list(ct_arrange),
+                 filename = sprintf("%s/%s/Supplementary_Figure_AAA_all_cell_types_grid_%s_%s.pdf", 
+                               an_mouse, plt_dir, id_comp, id_nmf), 
+                 width = 24,
+                 height = 24,
                  res = 600)
+
+ggpubr::ggexport(plotlist = list(ct_arrange),
+                 filename = sprintf("%s/%s/Supplementary_Figure_AAA_all_cell_types_grid_%s_%s.jpeg",
+                               an_mouse, plt_dir, id_comp, id_nmf),
+                 width = 5000,
+                 height = 4500,
+                 res = 300)
+
 ```
 
 
-### Topic signature reproducibility
+### Topic profile reproducibility
 Load cluster markers
 ```{r}
 cluster_markers_all <- readRDS(file = "data/MusMusculus/allen_reference/markers_allen_ref_70k.RDS")
@@ -305,15 +323,16 @@ topic_plt_arr <- lapply(seq_len(10), function(i) {
   rownames(h) <- paste("Topic", 1:nrow(h), sep = " ")
   
   topic_profile_plts <- dot_plot_profiles_fun(h = h,
-                      train_cell_clust = nmf_mod_ls[[2]], 
+                      train_cell_clust = nmf_mod_ls[[2]],
                       clust_vr = clust_vr)
   
-  tmp_plt <- topic_profile_plts[[2]] + 
-    labs(title = sprintf("Topic signatures: Iteration %s", i)) +
+  tmp_plt <- topic_profile_plts[[2]] +
+    # scale_size(limits = c(0, 1)) +
+    labs(title = sprintf("Topic Profiles: Iteration %s", i)) +
     theme(
       plot.title = element_text(hjust = 0.5, size = 15),
-      axis.text.x = element_text(angle = 90, vjust = 0.5),
-      axis.text.y = element_text(size = 10))
+      axis.text.x = element_text(angle = 90, vjust = 0.5, size = 5),
+      axis.text.y = element_text(size = 4))
   
   return(tmp_plt)
 }) %>% ggpubr::ggarrange(plotlist = ., ncol = 3, nrow = 4)
@@ -325,6 +344,15 @@ ggpubr::ggexport(plotlist = list(topic_plt_arr),
                  width = 36,
                  height = 36,
                  res = 900)
+
+ggpubr::ggexport(plotlist = list(topic_plt_arr),
+                 filename = sprintf("%s/%s/Supplementary_Figure_FFF_topic_signatures_arrange_10_%s_%s_.jpeg", 
+                     an_mouse, plt_dir, id_comp, id_nmf_iter),
+                 pointsize = 2,
+                 width = 4000,
+                 height = 5000,
+                 res = 300)
+
 ```
 
 Show topic profiles of all the cell types within a cell type
@@ -357,8 +385,8 @@ topic_profile_plts <- dot_plot_profiles_fun(h = h,
 all_cell_prof_plt <- topic_profile_plts[[1]] + 
   theme(
     axis.text.x = element_blank(),
-    axis.text.y = element_text(size = 6)) +
-  scale_size(range = c(0, 10))
+    axis.text.y = element_text(size = 2)) +
+  scale_size(range = c(0, 3))
 
 ggpubr::ggexport(plotlist = list(all_cell_prof_plt),
                  filename = sprintf("%s/%s/Supplementary_Figure_GGG_all_cell_topic_profile_%s_%s.pdf", 
@@ -366,5 +394,13 @@ ggpubr::ggexport(plotlist = list(all_cell_prof_plt),
                  width = 32,
                  height = 32,
                  res = 600)
+
+
+ggpubr::ggexport(plotlist = list(all_cell_prof_plt),
+                 filename = sprintf("%s/%s/Supplementary_Figure_GGG_all_cell_topic_profile_%s_%s.jpeg",
+                                    an_mouse, plt_dir, id_comp, id_nmf_iter),
+                 width = 5000,
+                 height = 5000,
+                 res = 400)
 
 ```

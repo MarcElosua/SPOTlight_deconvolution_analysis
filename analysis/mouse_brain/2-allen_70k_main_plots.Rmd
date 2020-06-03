@@ -80,22 +80,22 @@ cell_types_metadata <- colnames(brain@meta.data)[colnames(brain@meta.data) %in% 
 
 To maintain consistent colors for each cell type between different plots we will create a dataframe of equivalencies which we will draw colors from
 ```{r}
-col_df <- data.frame(cell_types = c(cell_types, "L2.3"),
+col_df <- data.frame(cell_types = sort(c(cell_types, "L2.3")),
            col_vector = col_vector[1:(length(cell_types)+1)])
 ```
 
 To return the right name in the plots:
 ```{r}
-ct_names <- c("Astro", "CA1sp", "CA1sp.SUB-sp.Kcnip1", "CA2sp.IG", "CA3sp", 
-              "Car3", "CR", "DG", "Doublet", "Endo", "IT.RHP.Dcn", 
-              "L2.3.IT.Cdc14a", "L2.3.IT.Cxcl14", "L2.3.IT.Ndst4.Endou", 
-              "L2.3.IT.Otof", "L2.3.IT.Plch1", "L4.IT", "L4.5.IT", "L5.ET", 
-              "L5.IT", "L6.CT" ,"L6.IT", "L6b", "Lamp5", "Lamp5.Lhx6", 
-              "Low.Quality", "Ly6g6e", "Macrophage", "Meis2", "NP", "Oligo",
-              "PIR.Six3", "POST-PRE-PAR.Ptgfr", "Pvalb", "RHP.Cplx3", 
-              "RSP_ACA.IT.Scnn1a", "RSP.ACA.L4.5.IT", "Serpinf1", "SMC", "Sncg",
-              "Sncg.Ndnf.HPF", "Sst", "Sst.Chodl", "SUB-Sp.Ndst4", "Unknown", 
-              "Vip", "VLMC", "L2.3")
+# ct_names <- c("Astro", "CA1sp", "CA1sp.SUB-sp.Kcnip1", "CA2sp.IG", "CA3sp", 
+#               "Car3", "CR", "DG", "Doublet", "Endo", "IT.RHP.Dcn", 
+#               "L2.3.IT.Cdc14a", "L2.3.IT.Cxcl14", "L2.3.IT.Ndst4.Endou", 
+#               "L2.3.IT.Otof", "L2.3.IT.Plch1", "L4.IT", "L4.5.IT", "L5.ET", 
+#               "L5.IT", "L6.CT" ,"L6.IT", "L6b", "Lamp5", "Lamp5.Lhx6", 
+#               "Low.Quality", "Ly6g6e", "Macrophage", "Meis2", "NP", "Oligo",
+#               "PIR.Six3", "POST-PRE-PAR.Ptgfr", "Pvalb", "RHP.Cplx3", 
+#               "RSP_ACA.IT.Scnn1a", "RSP.ACA.L4.5.IT", "Serpinf1", "SMC", "Sncg",
+#               "Sncg.Ndnf.HPF", "Sst", "Sst.Chodl", "SUB-Sp.Ndst4", "Unknown", 
+#               "Vip", "VLMC", "L2.3")
 
 plt_names <- c("Astrocytes", "CA1sp", "CA1sp/SUB-sp Kcnip1", "CA2sp/IG", "CA3sp",
                "Car3", "Cajal-Retzius", "DG", "Doublet", "Endothelium", 
@@ -109,7 +109,10 @@ plt_names <- c("Astrocytes", "CA1sp", "CA1sp/SUB-sp Kcnip1", "CA2sp/IG", "CA3sp"
                "Sncg/Ndnf HPF", "Sst", "Sst Chodl", "SUB-Sp Ndst4", "Unknown", 
                "Vip", "VLMC", "L2/3")
 
-ct_df <- data.frame(ct_names, plt_names)
+ct_df <- data.frame(ct_names = gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
+                                            x = plt_names,
+                                            perl = TRUE), 
+                    plt_names = plt_names)
 
 ```
 
@@ -234,7 +237,7 @@ Start by Making a dictionary of: cell type name in the data - cell type name in 
 ct_dict <- list()
 ct_dict[["CA1sp"]][["gene"]] <- "Fibcd1"
 ct_dict[["CA1sp"]][["name"]] <- "CA1"
-ct_dict[["CA1sp"]][["plot_name"]] <- "Cornu Ammonis 1"
+ct_dict[["CA1sp"]][["plot_name"]] <- "Cornu Ammonis 1 sp"
 
 ct_dict[["CA2sp.IG"]][["gene"]] <- "Ccdc3"
 ct_dict[["CA2sp.IG"]][["name"]] <- "CA2"
@@ -242,7 +245,7 @@ ct_dict[["CA2sp.IG"]][["plot_name"]] <- "Cornu Ammonis 2 sp"
 
 ct_dict[["CA3sp"]][["gene"]] <- "Pvrl3"
 ct_dict[["CA3sp"]][["name"]] <- "CA3"
-ct_dict[["CA3sp"]][["plot_name"]] <- "Cornu Ammonis 3"
+ct_dict[["CA3sp"]][["plot_name"]] <- "Cornu Ammonis 3 sp"
 
 ct_dict[["DG"]][["gene"]] <- "Prox1"
 ct_dict[["DG"]][["name"]] <- "DG"
@@ -432,10 +435,10 @@ plot_ls <- lapply(ct_ls, function(ct) {
   
   #### Save plot ####
   ggpubr::ggexport(plotlist = list(final_arr),
-                         filename = sprintf("analysis/mouse_brain/Fig_%s_arrange.pdf", nam), 
-                         width = 7.91, 
-                         height = 9.38, 
-                         res = 600)
+                         filename = sprintf("%s/%s/Fig_%s_arrange.jpeg", an_mouse, plt_dir, nam), 
+                         width = 3000, 
+                         height = 3700, 
+                         res = 300)
 
   return(final_arr + theme(plot.background = element_rect(fill = NA, colour = "black", size = 2)))
 })
@@ -445,7 +448,7 @@ plot_ls
 
 ##### Join Hippocampus plots
 ```{r}
-cowplot::plot_grid(plotlist = list(plot_ls[[1]], NULL, plot_ls[[2]],
+hipp_plt <- cowplot::plot_grid(plotlist = list(plot_ls[[1]], NULL, plot_ls[[2]],
                                    NULL, NULL, NULL,
                                    plot_ls[[3]], NULL, plot_ls[[4]]), 
                    nrow = 3,
@@ -453,15 +456,23 @@ cowplot::plot_grid(plotlist = list(plot_ls[[1]], NULL, plot_ls[[2]],
                    # align = "hv", 
                    rel_widths = c(1, 0.1, 1),
                    rel_heights = c(1, 0.1, 1),
-                   axis = "trbl") %>% 
-    ggpubr::ggexport(plotlist = list(.),
-                         filename =
-                       sprintf("%s/%s/Figure_ZZZ_hippocampus_arrange_%s_%s.pdf",
-                               an_mouse, plt_dir, id_comp, id_nmf), 
-                         width = 15, 
-                         height = 18, 
-                         res = 600)
+                   axis = "trbl")
 
+ggpubr::ggexport(plotlist = list(hipp_plt),
+                     filename =
+                   sprintf("%s/%s/Figure_ZZZ_hippocampus_arrange_%s_%s.pdf",
+                           an_mouse, plt_dir, id_comp, id_nmf), 
+                     width = 15, 
+                     height = 18, 
+                     res = 600)
+
+ggpubr::ggexport(plotlist = list(hipp_plt),
+                     filename =
+                   sprintf("%s/%s/Figure_ZZZ_hippocampus_arrange_%s_%s.jpeg",
+                           an_mouse, plt_dir, id_comp, id_nmf), 
+                     width = 5000,
+                     height = 6500,
+                     res = 300)
 
 ```
 
@@ -469,7 +480,7 @@ cowplot::plot_grid(plotlist = list(plot_ls[[1]], NULL, plot_ls[[2]],
 #### Scatterpie spatial plots
 ##### All cell types
 ```{r}
-joint_scatterpie_fun(se_obj = brain, 
+all_ct_plt <- joint_scatterpie_fun(se_obj = brain, 
                      cell_types_all = cell_types_metadata,
                      img_path1 = "data/MusMusculus/sag_ant_1/spatial/tissue_lowres_image.png",
                      img_path2 = "data/MusMusculus/sag_post_1/spatial/tissue_lowres_image.png",
@@ -480,13 +491,21 @@ joint_scatterpie_fun(se_obj = brain,
                      img_alpha = 1,
                      scatterpie_alpha = 1,
                      pie_scale = 0.2,
-                     col_df = col_df) %>%   
-  ggpubr::ggexport(plotlist = list(.), 
-                   filename = sprintf("%s/%s/Figure_YYY_spatial_scatterpie_allen_%s_%s.pdf",
-                                    an_mouse, plt_dir, id_comp, id_nmf), 
-                   width = 16, 
-                   height = 12, 
-                   res = 600)
+                     col_df = col_df)   
+
+ggpubr::ggexport(plotlist = list(all_ct_plt), 
+               filename = sprintf("%s/%s/Figure_YYY_spatial_scatterpie_allen_%s_%s.pdf",
+                                an_mouse, plt_dir, id_comp, id_nmf), 
+               width = 16, 
+               height = 12, 
+               res = 600)
+
+ggpubr::ggexport(plotlist = list(all_ct_plt + theme(legend.position = "none")), 
+               filename = sprintf("%s/%s/Figure_YYY_spatial_scatterpie_allen_%s_%s.jpeg",
+                                an_mouse, plt_dir, id_comp, id_nmf), 
+               width = 6000, 
+               height = 4000, 
+               res = 400)
 
 ```
 
@@ -556,6 +575,7 @@ anterior_plt <- spatial_scatterpie(se_obj = brain_mod,
                  scatterpie_alpha = 1,
                  pie_scale = 1,
                  col_df = col_df)
+
 posterior_plt <- spatial_scatterpie(se_obj = brain_mod,
                    cell_types_all = cell_types_metadata_mod,
                    img_path = "data/MusMusculus/sag_post_1/spatial/tissue_lowres_image.png",
@@ -601,10 +621,18 @@ ggpubr::ggexport(plotlist = list(general_cortex_plt),
                    width = 12, 
                    height = 9, 
                    res = 600)
+
+ggpubr::ggexport(plotlist = list(general_cortex_plt + theme_void()), 
+                   filename = sprintf("%s/%s/general_cortex_spatial_scatterpie_allen_%s_%s.jpeg",
+                                    an_mouse, plt_dir, id_comp, id_nmf), 
+                   width = 6000, 
+                   height = 4000, 
+                   res = 400)
+
 ```
 
 Individual proportion plots
-```{reval = FALSE}
+```{r eval = FALSE}
 cortex_arrange <- lapply(cortex_layers_mod, function(ct) {
   # print(ct)
   ct_ls <- join_spatial_plots(spatial_obj = brain_mod, ct = ct)
@@ -821,71 +849,3 @@ ggpubr::ggexport(plotlist = list(l2_def),
                  width = 18, 
                  height = 12)
 ```
-
-
-### Min contribution evaluation
-```{r}
-min_cont_df <- readRDS(file = sprintf("%s/%s/min_cont_df_%s.RDS", an_mouse, robj_dir, id_nmf))
-min_cont_long_df <- min_cont_df %>% tidyr::pivot_longer(cols = c("Accuracy", 
-                                             "Specificity", "Sensitivity", "Precision", 
-                                             "F1 score"),
-                                    names_to = "Metric", 
-                                    values_to = "Value") %>% 
-  mutate(min_cont = factor(x = min_cont, 
-                           levels = as.character(sort(as.numeric(unique(min_cont))))))
-```
-
-#### Visualization
-Visualize classification metrics
-```{r}
-my_theme <- theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
-
-best_min_cont <- min_cont_df[min_cont_df$`F1 score` == max(min_cont_df$`F1 score`), "min_cont"]
-p1 <- min_cont_long_df %>%
-  mutate(best = if_else(min_cont == best_min_cont, TRUE, FALSE)) %>% 
-  ggplot() +
-  geom_point(aes(x = min_cont, y = Value, colour = best)) +
-  facet_wrap(Metric~.) +
-  ylim(0, 1) +
-  theme_classic() +
-  my_theme +
-  theme(legend.position = "none") +
-  labs(x = "min_cont", y = "", colour = "") +
-  scale_color_manual(values = c(col_high, col_low))
-
-p1
-```
-
-Visualize Jesnen-Shannon divergence distance
-```{r}
-p2 <- min_cont_df %>% 
-  ggplot(aes(x = reorder(min_cont, -JSD_50), y = JSD_50)) +
-  geom_errorbar(aes(ymin = JSD_25, ymax = JSD_75), width = .3, size = 1) +
-  geom_point(aes(size = time_mins)) +
-  my_theme +
-  labs(x = "", y = "")
-
-p2
-
-
-p3 <- tech_raw_ds %>%
-tidyr::pivot_longer(cols = c("JSD_25", "JSD_50", "JSD_75"),
-                names_to = "quantile", values_to = "value") %>%
-dplyr::mutate(
-  value = as.numeric(value),
-  tech = factor(tech, levels = levels(reorder(tech_proc$tech, -tech_proc$JSD_50)))) %>% 
-ggplot(aes(x = tech, y = value, color = quantile)) +
-geom_point() +
-my_theme
-p3
-
-```
-
-# Least-squares residuals plot
-We want to check the least square residuals and see if we are better at predicting in some regions
-```{r}
-brain[["res_ss"]] <- decon_mtrx[, "res_ss"]
-SpatialFeaturePlot(object = brain, features = "res_ss")
-which(is.na(decon_mtrx[, "res_ss"]))
-```
-

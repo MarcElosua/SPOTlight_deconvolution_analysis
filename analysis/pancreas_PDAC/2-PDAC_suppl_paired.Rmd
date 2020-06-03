@@ -573,10 +573,10 @@ paired_ct_plts <- lapply(names(paired_decon_mtrx_ls), function(geo) {
                  point_size = ct,
                  point_alpha = ct) +
       ggplot2::theme_void() +
-      ggplot2::labs(title = sprintf("%s - Proportion of %s", 
-                                  sample_dict[[geo]], 
+      ggplot2::labs(title = sprintf("Proportion of %s", 
+                                  # sample_dict[[geo]], 
                                   df_col[df_col$df_name == ct, "plt_name"])) +
-    theme(plot.title = element_text(hjust = 0.5, size = 12))
+    theme(plot.title = element_text(hjust = 0.5, size = 10))
     # tmp_plt <- spanielPlot(object = st_se, 
     #         grob = st_se@images[[1]],
     #         plotType = "Gene",
@@ -600,12 +600,12 @@ paired_ct_plts <- lapply(names(paired_decon_mtrx_ls), function(geo) {
     #     name = "Proportion") +
     #   scale_size_continuous(limits = c(0, 1), name = "Proportion", range = c(0, 3)) +
     #   coord_fixed(1)
-    ggpubr::ggexport(plotlist = list(tmp_plt),
-                     filename = sprintf("%s/%s/paired_cell_type_%s_plts_%s.jpeg",
-                                        an_pdac, plt_dir, ct, geo),
-                     width = 2500,
-                     height = 2000,
-                     res = 400)
+    # ggpubr::ggexport(plotlist = list(tmp_plt),
+    #                  filename = sprintf("%s/%s/paired_cell_type_%s_plts_%s.jpeg",
+    #                                     an_pdac, plt_dir, ct, geo),
+    #                  width = 2500,
+    #                  height = 2000,
+    #                  res = 400)
 
     
     return(tmp_plt)
@@ -617,15 +617,23 @@ names(paired_ct_plts) <- names_ls
 
 lapply(names(paired_ct_plts), function(geo) {
   plt_ls <- paired_ct_plts[[geo]]
-  ggpubr::ggarrange(plotlist = plt_ls,
+  ct_arr <- ggpubr::ggarrange(plotlist = plt_ls,
                     ncol = 4,
-                    nrow = 4,
-                    align = "hv") %>% 
-    ggpubr::ggexport(filename = sprintf("%s/%s/Supplementary_Figure_DDD_paired_cell_type_arrange_plts_%s.pdf", 
-                                        an_pdac, plt_dir, geo),
-                     width = 24,
-                     height = 18,
-                     res = 600)
+                    nrow = 5,
+                    align = "hv")
+  ggpubr::ggexport(ct_arr,
+                   filename = sprintf("%s/%s/Supplementary_Figure_DDD_paired_cell_type_arrange_plts_%s.pdf", 
+                                      an_pdac, plt_dir, geo),
+                   width = 24,
+                   height = 18,
+                   res = 600)
+  
+  ggpubr::ggexport(ct_arr,
+                   filename = sprintf("%s/%s/Supplementary_Figure_DDD_paired_cell_type_arrange_plts_%s.jpeg", 
+                                      an_pdac, plt_dir, geo),
+                   width = 5000,
+                   height = 4000,
+                   res = 300)
 })
 ```
 

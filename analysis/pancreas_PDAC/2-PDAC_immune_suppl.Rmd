@@ -363,7 +363,7 @@ immune_markers <- readRDS("analysis/pancreas_PDAC/data/Atlas_specific_markers_15
 ##### Signature plot list
 ```{r}
 immune_signature_plts <- lapply(names(immune_decon_mtrx_ls), function(geo) {
-  print(geo)
+  # print(geo)
   decon_mtrx <- immune_decon_mtrx_ls[[geo]]
   colnames(decon_mtrx) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
                                  x = colnames(decon_mtrx), 
@@ -375,7 +375,7 @@ immune_signature_plts <- lapply(names(immune_decon_mtrx_ls), function(geo) {
   
   ## Addcell type signature to the metadata
   for (i in cell_types) {
-    print(i)
+    # print(i)
     # Pull gene marker list
     features <- immune_markers[[pdac_plt_names[pdac_plt_names$df_name == i, "plt_name"]]]
     
@@ -414,7 +414,7 @@ immune_signature_plts <- lapply(names(immune_decon_mtrx_ls), function(geo) {
       ggplot2::labs(title = sprintf("%s - Signature score of %s", 
                                   sample_dict[[geo]], 
                                   pdac_plt_names[pdac_plt_names$firm_name == firma, "plt_name"])) +
-    theme(plot.title = element_text(hjust = 0.5, size = 12)) +
+    theme(plot.title = element_text(hjust = 0.5, size = 9)) +
     ggplot2::scale_size_continuous(range=c(0, 3)) +
     ggplot2::scale_color_gradientn(colours = heat.colors(10, rev = TRUE)) +
     labs(color = "Signature score",
@@ -489,7 +489,7 @@ immune_ct_plts <- lapply(names(immune_decon_mtrx_ls), function(geo) {
   st_se@meta.data <- cbind(st_se@meta.data, decon_mtrx)
 
   ct_plt <- lapply(cell_types, function(ct){
-    print(ct)
+    # print(ct)
   
     tmp_plt <- plot_spaniel(data_df = data.frame(st_se@meta.data),
                grob = st_se@images[[1]],
@@ -498,11 +498,14 @@ immune_ct_plts <- lapply(names(immune_decon_mtrx_ls), function(geo) {
                point_colour = ct,
                point_size = ct,
                point_alpha = ct) +
+    ggplot2::scale_size_continuous(range=c(0, 1), limits = c(0, 1)) +
     ggplot2::theme_void() +
-    ggplot2::labs(title = sprintf("%s - Proportion of %s", 
-                                sample_dict[[geo]], 
+    ggplot2::labs(title = sprintf("Proportion of %s", 
+                                # sample_dict[[geo]], 
                                 pdac_plt_names[pdac_plt_names$df_name == ct, "plt_name"])) +
-    theme(plot.title = element_text(hjust = 0.5, size = 12))
+    theme(plot.title = element_text(hjust = 0.5, size = 9),
+          legend.title = element_text(hjust = 0.5, size = 7),
+          legend.text = element_text(hjust = 0.5, size = 7))
 
     # tmp_plt <- spanielPlot(object = st_se, 
     #         grob = st_se@images[[1]],
@@ -527,12 +530,12 @@ immune_ct_plts <- lapply(names(immune_decon_mtrx_ls), function(geo) {
     #     name = "Proportion") +
     #   scale_size_continuous(limits = c(0, 1), name = "Proportion", range = c(0, 3)) +
     #   coord_fixed(1)
-    ggpubr::ggexport(plotlist = list(tmp_plt),
-                     filename = sprintf("%s/%s/immune_cell_type_%s_plts_%s.jpeg",
-                                        an_pdac, plt_dir, ct, geo),
-                     width = 2500,
-                     height = 2000,
-                     res = 400)
+    # ggpubr::ggexport(plotlist = list(tmp_plt),
+    #                  filename = sprintf("%s/%s/immune_cell_type_%s_plts_%s.jpeg",
+    #                                     an_pdac, plt_dir, ct, geo),
+    #                  width = 2500,
+    #                  height = 2000,
+    #                  res = 400)
     return(tmp_plt)
     })
   })
@@ -541,15 +544,24 @@ names(immune_ct_plts) <- names_ls
 
 lapply(names(immune_ct_plts), function(geo) {
   plt_ls <- immune_ct_plts[[geo]]
-  ggpubr::ggarrange(plotlist = plt_ls,
+  ct_arr <- ggpubr::ggarrange(plotlist = plt_ls,
                     ncol = 4,
-                    nrow = 4,
-                    align = "hv") %>% 
-    ggpubr::ggexport(filename = sprintf("%s/%s/immune_cell_type_arrange_plts_%s.pdf", 
-                                        an_pdac, plt_dir, geo),
-                     width = 24,
-                     height = 18,
-                     res = 600)
+                    nrow = 6,
+                    align = "hv")
+  
+  ggpubr::ggexport(ct_arr, 
+                   filename = sprintf("%s/%s/immune_cell_type_arrange_plts_%s.pdf", 
+                                      an_pdac, plt_dir, geo),
+                   width = 24,
+                   height = 18,
+                   res = 600)
+  
+  ggpubr::ggexport(ct_arr, 
+                   filename = sprintf("%s/%s/immune_cell_type_arrange_plts_%s.jpeg", 
+                                      an_pdac, plt_dir, geo),
+                   width = 5000,
+                   height = 4000,
+                   res = 400)
 })
 
 ```
@@ -582,10 +594,10 @@ lapply(names(immune_ct_plts), function(geo) {
     return(g_plt)
   
   }) %>%
-    ggpubr::ggarrange(plotlist = ., ncol = 3, nrow = 3) %>% 
+    ggpubr::ggarrange(plotlist = ., ncol = 3, nrow = 8) %>% 
     ggpubr::ggexport(., 
                    filename = sprintf("%s/%s/Supplementary_Figure_X_immune_spatial_deconv_signature-location_%s_%s_%s.pdf", an_pdac, plt_dir, geo, id_comp, id_nmf),
-                   height = 15, 
+                   height = 32, 
                    width = 32)
 
 })
