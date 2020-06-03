@@ -1,4 +1,4 @@
-plot_spaniel <- function(data_df, grob, x, y, point_colour, point_size, point_alpha){
+plot_spaniel <- function(data_df, grob, x, y, point_colour, point_size){
   
   # Inverse Y to flip the coordinates
   data_df$y_inv <- 36 - data_df$y
@@ -8,9 +8,7 @@ plot_spaniel <- function(data_df, grob, x, y, point_colour, point_size, point_al
   tmp_plt <- ggplot2::ggplot(data_df,
                   ggplot2::aes_string(x, "y_inv",
                                       color = point_colour, 
-                                      size = point_size
-                                      # alpha = point_alpha
-                                      )) +
+                                      size = point_size)) +
     ggplot2::xlim(1, 33) +
     ggplot2::ylim(1, 35) +
     # Layer 1 - Plot image
@@ -29,7 +27,6 @@ plot_spaniel <- function(data_df, grob, x, y, point_colour, point_size, point_al
     # Coordinates fixed so x and y keep the proportions
     coord_fixed(1) +
     # Tune colour parameters
-    # ggplot2::scale_alpha_continuous(range = c(0, 1), limits = c(0, 1)) +
     ggplot2::scale_size_continuous(range=c(0, 3), limits = c(0, 1)) +
     ggplot2::scale_color_gradientn(
       colours = heat.colors(10, rev = TRUE),
@@ -37,7 +34,6 @@ plot_spaniel <- function(data_df, grob, x, y, point_colour, point_size, point_al
     # Join legends into one
     ggplot2::guides(color = ggplot2::guide_legend(), 
                     size = ggplot2::guide_legend()
-                    # alpha = ggplot2::guide_legend()
                     )
   
   return(tmp_plt)

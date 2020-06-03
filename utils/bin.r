@@ -229,17 +229,7 @@ prep_seobj_topic_fun <- function(se_obj, n=5000, normalize=F, verbose=F){
     count_mtrx <- count_mtrx[,colnames(count_mtrx) %in% Seurat::VariableFeatures(se_obj)]
   }
   
-  # Remove genes not expressed in at least 0.5% of the cells
-  # min_cells <- 0.005*ncol(se_obj)
-  # count_mtrx <- count_mtrx[,colSums(count_mtrx != 0) > min_cells]
-  
-  # 3rd normalize if required
-  # if (normalize){
-  #   # For now do a Laplacian 1-up normalization so that genes that never occur we still have some probability of them happening
-  #   count_mtrx <- (count_mtrx_hvg+1)/(rowSums(count_mtrx_hvg)+ncol(count_mtrx_hvg)) 
-  # }
-  
-  # 4th reconvert the matrix to sparse format again
+  # 3rd reconvert the matrix to sparse format again
   count_mtrx <- Matrix::Matrix(count_mtrx, sparse = T)
   
   return(count_mtrx)
