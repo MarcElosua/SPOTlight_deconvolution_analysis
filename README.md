@@ -40,4 +40,3 @@ To download the R studio image
 
 ## File system
 This repository contains 3 main analysis directories, each corresponding to the 3 main analysis of the paper. Scripts within each folder are numbered in the order they are to be run.
->>>>>>> 671522b044bb568d9c1a44fd72583574ad8e5d33
