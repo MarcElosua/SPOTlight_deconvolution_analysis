@@ -1,0 +1,233 @@
+---
+title: "CIBERSORTx deconvolution"
+author: "Marc Elosua-Bayes"
+date: "10/20/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+In this Rmarkdown document we are going to use CIBERSORT to deconvolute mixtures of cells. Ultimately the goal is to compare the performance with SPOTlight and other deconvolution tools. We use a consesus set of 1000 spots made out of between 2-8 cells reflecting the composition of Visium's spot. Synthetic mixtures and scRNAseq datasets are common for all the tools and are generated in the script common_synthetic_spots.Rmd
+
+CIBERSORTx runs on a Docker container. You need to request access to it at their (website)[https://cibersortx.stanford.edu/]. In this script we will do the data preprocessing and show the command we run to launch CIBERSORTs in the Docker environment. Further instructions on how to analyze the data can be found in *README_CIBERSORTx/README_CIBERSORTxFractions.txt*.
+
+## Libraries
+```{r}
+library(Seurat)
+library(dplyr)
+```
+
+
+## Parameters
+```{r}
+set.seed(321)
+
+tech <- "QUARTZ-seq"
+org <- "hs"
+tissue <- "pbmc"
+dwn_smplng <- "both"
+source("misc/paths_vrs.R")
+
+if (! file.exists(sprintf("analysis/%s/%s", an_tools, plt_dir))) {
+  dir.create(sprintf("analysis/%s/%s", an_tools, plt_dir),
+             showWarnings = FALSE,
+             recursive = TRUE)
+  dir.create(sprintf("analysis/tool_benchmarking/%s", robj_dir),
+             showWarnings = FALSE,
+             recursive = TRUE)
+}
+
+```
+
+## Load data
+Here we are loading the scRNAseq seurat object from QUARTZ-seq and the common synthetic spots. Both generated in the common_synthetic_spots.Rmd markdown document in this folder.
+```{r}
+se_quartz <- readRDS(file = sprintf("%s/%s/se_quartz.RDS", an_tools, robj_dir))
+
+synthetic_mixtures <- readRDS(file = sprintf("%s/%s/common_synthetic_mixtures.RDS", an_tools, robj_dir))
+```
+
+## Data preprocessing
+We need to prepare a signature file and a mixture file and pass the path to the **CIBERSORT** function.
+Details on how this data has to be structured can be found [here](https://cibersortx.stanford.edu/tutorial.php).
+
+### Generate CIBERSORTx reference set
+```{r}
+#### Get cell IDs to subset by cluster ####
+keep_ids <- lapply(split(se_quartz@meta.data, se_quartz@meta.data[, "nnet2"]), function(subdf) {
+  # Determine n_sample, if the size of the group is < cl_n use all the group, if not just use cl_n
+  n_sample <- if_else(nrow(subdf) < 5, as.numeric(nrow(subdf)), as.numeric(5))
+  # Subset a random selection of that group and get the identifiers
+  tmp_ds <- subdf[sample(seq_len(nrow(subdf)), n_sample), ] %>%
+    tibble::rownames_to_column("ID") %>%
+    dplyr::pull(ID)
+  return(tmp_ds)
+}) %>%
+  purrr::flatten_chr() # flatten the list into a vector
+
+#### Subset seurat object ####
+se_obj <- se_quartz[, keep_ids]
+mtrx <- as.matrix(se_obj@assays$RNA@counts)
+sc_sig <- data.frame(mtrx) %>%
+  tibble::rownames_to_column("Gene")
+
+colnames(sc_sig) <- c("Gene", se_obj$nnet2)
+
+readr::write_tsv(
+  x = sc_sig,
+  file = here::here(sprintf("%s/%s/cibersortx_signature.tsv",
+                            an_tools, robj_dir)))
+```
+
+### Save Spot mixtures
+```{r}
+synthetic_mixtures <- readRDS(
+  file = here::here(sprintf("%s/%s/common_synthetic_mixtures.RDS",
+                            an_tools, robj_dir)))
+
+syn_mixt_sub <- data.frame(synthetic_mixtures[[1]])[, 1:50] %>%
+  tibble::rownames_to_column("Gene")
+
+readr::write_tsv(
+  x = syn_mixt_sub,
+  file = here::here(sprintf("%s/%s/cibersortx_buks_50.tsv",
+                            an_tools, robj_dir)))
+```
+
+Save all the spots in the right format
+```{r}
+synthetic_mixtures <- readRDS(
+  file = here::here(sprintf("%s/%s/common_synthetic_mixtures.RDS",
+                            an_tools, robj_dir)))
+
+syn_mixt <- data.frame(synthetic_mixtures[[1]]) %>%
+  tibble::rownames_to_column("Gene")
+
+readr::write_tsv(
+  x = syn_mixt,
+  file = here::here(sprintf("%s/%s/cibersortx_buks.tsv",
+                            an_tools, robj_dir)))
+
+```
+
+Save mixtures 10 by 10
+```{r}
+lapply(seq(1, 50, 10), function(iter) {
+  syn_mixt_sub <- data.frame(synthetic_mixtures[[1]])[, iter:(iter+9)] %>%
+    tibble::rownames_to_column("Gene")
+  
+  readr::write_tsv(
+    x = syn_mixt_sub,
+    file = here::here(sprintf("%s/%s/cibersortx_buks_%s_%s.tsv",
+                              an_tools, robj_dir, iter, iter + 9)))
+  NULL
+})
+
+```
+
+## CIBERSORTx online
+We ran 50 spots through sibersort X online, here we load the data
+```{r}
+cibersortx_ls <- list.files(
+  path = here::here(sprintf("%s/%s",
+                            an_tools, robj_dir)),
+  pattern = "CIBERSORTx_Job",
+  full.names = TRUE)
+
+cibersortx_res <- purrr::map(cibersortx_ls, ~ readr::read_csv(file = .)) %>%
+  dplyr::bind_rows() %>%
+  tibble::as_tibble(t(.), name_repair = "row_names") %>%
+  tibble::column_to_rownames("Mixture")
+
+colnames(cibersortx_res) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
+                                            x = colnames(cibersortx_res),
+                                            perl = TRUE)
+```
+
+Save results
+```{r}
+saveRDS(object = cibersortx_res,
+        file = here::here(sprintf("%s/%s/cibersortx_deconv_1-50.RDS",
+                                  an_tools, robj_dir)))
+```
+
+
+## Docker environment
+Install Docker Desktop (https://www.docker.com/products/docker-desktop)
+Then, you open a terminal window, and you type the following command:
+
+```{bash}
+docker pull cibersortx/fractions
+```
+
+The next thing you need is a token that you will provide every time you run the
+CIBERSORTx executables. You can obtain the token from the CIBERSORTx website
+(https://cibersortx.stanford.edu/getoken.php).
+
+PAT CIBERSORTx container valid for 6 months starting from 20/10/2020: *24df1e4292518598f5b1d3b156975691*
+
+Please note that each token is uniquely tied to your user account, and tokens are
+good for a specific time interval from date of request, so you will need to
+request a new token when an existing one has expired.
+
+Once you have pulled the CIBERSORTx executable from Docker, and you have obtained
+a token from the CIBERSORTx website, you now have access to the CIBERSORTx Fractions
+executable and can run it following the instructions below.
+
+To run CIBERSORTx Fractions locally on your computer using docker, navigate to the
+directory containing the files you wish to analyze. 
+
+Next, you have to "bind mount" directories so that they can can be accessed within
+the docker container. This is done using the following command when setting up the
+CIBERSORTx job:
+
+```{bash}
+docker run -v {dir_path}:/src/data -v {dir_path}:/src/outdir cibersortx/fractions [Options]
+```
+
+Please note that you have to provide absolute paths. To better understand how to
+bind mount directories and setting up the CIBERSORTx job using docker, please follow
+the following examples: 
+
+# NSCLC PBMCs Single Cell RNA-Seq (Fig. 2a,b):
+# This example builds a signature matrix from single cell RNA sequencing data from
+# NSCLC PBMCs and enumerates the proportions of the different cell types in a RNA-seq dataset
+# profiled from whole blood using S-mode batch correction.
+**CIBERSORTx_signature_inferred_phenoclasses.txt is obtained form generating the signature matrix online at the CIBERSORTx web portal.**
+```{bash}
+docker run \
+-v /media/data1/Confinement/spatial_deconvolution/analysis/tool_benchmarking/2019-11-26/R_objects_2019-11-26/:/src/data \
+-v /media/data1/Confinement/spatial_deconvolution/analysis/tool_benchmarking/2019-11-26/R_objects_2019-11-26/:/src/outdir \
+cibersortx/fractions \
+--username marc.elosua@cnag.crg.eu \
+--token 24df1e4292518598f5b1d3b156975691 \
+--single_cell TRUE \
+--sigmatrix CIBERSORTx_signature_inferred_phenoclasses.txt \
+--mixture cibersortx_buks.tsv \
+--fraction 0 \
+--rmbatchSmode FALSE # Not needed since there is no technical variation here
+```
+
+In the outdir this returns: CIBERSORTx_Results.txt
+
+```{r}
+df <- readr::read_tsv(
+  file = "analysis/tool_benchmarking/2019-11-26/R_objects_2019-11-26/CIBERSORTx_Results.txt",
+  col_names = TRUE)
+table(is.na(df))
+
+# df <- readr::read_tsv(
+#   file = "analysis/tool_benchmarking/2019-11-26/R_objects_2019-11-26/CIBERSORTx_signature_inferred_phenoclasses.txt",
+#   col_names = TRUE)
+# table(is.na(df))
+# 
+# df2 <- readr::read_tsv(
+#   file = "analysis/tool_benchmarking/2019-11-26/R_objects_2019-11-26/cibersortx_signature.tsv",
+#   col_names = TRUE)
+# table(is.na(df))
+```
+
+
