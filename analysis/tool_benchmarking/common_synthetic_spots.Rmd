@@ -1,0 +1,109 @@
+---
+title: "Synthetic spot generator"
+author: "Marc Elosua-Bayes"
+date: "7/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+In this R markdown document we will generate a common set of 1.000 common synthetic mixtures on which we will test the different deconvolution tools. In order to do this we will use the PBMC dataset used for the benchmarking. We will use the data from the QUARTZ-seq dataset since it show to be the highest quality.
+
+## Libraries
+```{r}
+library(SPOTlight)
+```
+
+Parameters
+```{r}
+set.seed(321)
+
+tech <- "QUARTZ-seq"
+org <- "hs"
+tissue <- "pbmc"
+dwn_smplng <- "both"
+source(here::here("misc/paths_vrs.R"))
+
+if (! file.exists(here::here(sprintf("analysis/%s/%s", an_tools, plt_dir)))) {
+  dir.create(here::here(sprintf("analysis/%s/%s", an_tools, plt_dir)),
+             showWarnings = FALSE,
+             recursive = TRUE)
+  dir.create(here::here(sprintf("analysis/tool_benchmarking/%s", robj_dir)),
+             showWarnings = FALSE,
+             recursive = TRUE)
+}
+```
+
+## Load data
+```{r}
+load(here::here("data/techs/sce.all_classified.technologies.RData"))
+# Loads object named sce
+```
+
+## Subset QUARTZ-seq
+Select data from QUARTZ-seq only to generate the synthetic mixtures.
+```{r}
+sce_quartz <- sce[, sce$batch == "Quartz-Seq2"]
+sce_quartz$nnet2 <- as.character(sce_quartz$nnet2)
+table(sce_quartz$batch)
+table(sce_quartz$nnet2)
+```
+
+Since there just 1 Megakaryocytes we are going to remove it from the dataset
+```{r}
+sce_quartz <- sce_quartz[, sce_quartz$nnet2 != "Megakaryocytes"]
+```
+
+Convert SCE to Seurat object
+```{r}
+se_quartz <- Seurat::CreateSeuratObject(counts = sce_quartz@assays$data$counts,
+                                        meta.data = data.frame(sce_quartz@colData))
+
+saveRDS(object = se_quartz,
+        file = here::here(sprintf("%s/%s/se_quartz.RDS", an_tools, robj_dir)))
+```
+
+## Generate synthetic mixtures
+To this end we use `SPOTlight::test_spot_fun` which allows us to generate mixtures resembling visium's spots with average transcriptome sizes of 20K UMI. If the mixture of cells randomly generated exceeds 25K UMI we randomly downsample to 20k.
+```{r}
+synthetic_mixtures <- SPOTlight::test_spot_fun(se_obj = se_quartz,
+                                               clust_vr = "nnet2",
+                                               n = 1000,
+                                               verbose = TRUE)
+
+saveRDS(object = synthetic_mixtures,
+        file = here::here(sprintf("%s/%s/common_synthetic_mixtures.RDS", an_tools, robj_dir)))
+```
+
+## Generate CIBERSORTx reference set
+```{r}
+#### Get cell IDs to subset by cluster ####
+keep_ids <- lapply(split(se_quartz@meta.data, se_quartz@meta.data[, "nnet2"]), function(subdf) {
+  # Determine n_sample, if the size of the group is < cl_n use all the group, if not just use cl_n
+  n_sample <- if_else(nrow(subdf) < 5, as.numeric(nrow(subdf)), as.numeric(5))
+  # Subset a random selection of that group and get the identifiers
+  tmp_ds <- subdf[sample(seq_len(nrow(subdf)), n_sample), ] %>%
+    tibble::rownames_to_column("ID") %>%
+    dplyr::pull(ID)
+  return(tmp_ds)
+}) %>%
+  purrr::flatten_chr() # flatten the list into a vector
+
+#### Subset seurat object ####
+se_obj <- se_quartz[, keep_ids]
+mtrx <- as.matrix(se_obj@assays$RNA@counts)
+colnames(mtrx) <- se_obj$nnet2
+readr::write_tsv(x = data.frame(mtrx) %>% tibble::rownames_to_column("Gene"),
+                 path = here::here(sprintf("%s/%s/cibersortx_signature.tsv", an_tools, robj_dir)))
+```
+
+## Select first 50 mixtures
+```{r}
+synthetic_mixtures <- readRDS(file = here::here(sprintf("%s/%s/common_synthetic_mixtures.RDS", an_tools, robj_dir)))
+readr::write_tsv(x = data.frame(synthetic_mixtures[[1]][, 1:50]) %>% tibble::rownames_to_column("Gene"),
+                 path = here::here(sprintf("%s/%s/cibersortx_buks.tsv", an_tools, robj_dir)))
+```
+

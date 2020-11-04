@@ -1,0 +1,113 @@
+---
+title: "CIBERSORT deconvolution"
+author: "Marc Elosua-Bayes"
+date: "10/20/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+In this Rmarkdown document we are going to use CIBERSORT to deconvolute mixtures of cells. Ultimately the goal is to compare the performance with SPOTlight and other deconvolution tools. We use a consesus set of 1000 spots made out of between 2-8 cells reflecting the composition of Visium's spot. Synthetic mixtures and scRNAseq datasets are common for all the tools and are generated in the script common_synthetic_spots.Rmd
+
+CIBERSORT paper can be found [here](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5895181/).
+
+## Libraries
+```{r}
+library(Seurat)
+library(dplyr)
+# Script can be obtained from https://cibersort.stanford.edu/download.php
+```
+
+```{r}
+# BiocManager::install("preprocessCore")
+library("preprocessCore")
+source("analysis/tool_benchmarking/cibersort_alg.R")
+```
+
+## Parameters
+```{r}
+set.seed(321)
+
+tech <- "QUARTZ-seq"
+org <- "hs"
+tissue <- "pbmc"
+dwn_smplng <- "both"
+source("misc/paths_vrs.R")
+
+if (! file.exists(sprintf("analysis/%s/%s", an_tools, plt_dir))) {
+  dir.create(sprintf("analysis/%s/%s", an_tools, plt_dir),
+             showWarnings = FALSE,
+             recursive = TRUE)
+  dir.create(sprintf("analysis/tool_benchmarking/%s", robj_dir),
+             showWarnings = FALSE,
+             recursive = TRUE)
+}
+```
+
+## Load data
+Here we are loading the scRNAseq seurat object from QUARTZ-seq and the common synthetic spots. Both generated in the common_synthetic_spots.Rmd markdown document in this folder.
+```{r}
+se_quartz <- readRDS(file = sprintf("%s/%s/se_quartz.RDS", an_tools, robj_dir))
+
+synthetic_mixtures <- readRDS(file = sprintf("%s/%s/common_synthetic_mixtures.RDS", an_tools, robj_dir))
+```
+
+## Prep data
+We need to prepare a signature file and a mixture file and pass the path to the **CIBERSORT** function.
+Details on how this data has to be structured can be found [here](https://cibersort.stanford.edu/manual.php#sigfile).
+
+### scRNAseq reference
+CIBERSORT requires an input matrix of reference gene expression signatures, or signature matrix, for routine analysis. This is stored in a Signature Genes File and consists of a table with groups of "barcode" genes whose expression values collectively define a unique gene expression signature for each component pure cell population that will be used to deconvolute the mixture.
+*Gene x Cell* where the cell name indicates which cell type it is.
+```{r eval = FALSE}
+dir.create("analysis/tool_benchmarking/CIBERSORT_data", recursive = TRUE, showWarnings = FALSE)
+
+rbind(
+  se_quartz@meta.data[, "nnet2"],
+  as.matrix(se_quartz@assays$RNA@counts)
+  ) %>%
+  data.frame() %>%
+  tibble::rownames_to_column("gene") %>%
+  readr::write_tsv(.,
+                   file = "analysis/tool_benchmarking/CIBERSORT_data/sig_matrix.tsv",
+                   col_names = FALSE)
+```
+
+
+### Spatial spots
+```{r eval = FALSE}
+synthetic_mixtures[[1]] %>%
+  data.frame() %>%
+  tibble::rownames_to_column("gene") %>%
+  readr::write_tsv(.,
+                   file = "analysis/tool_benchmarking/CIBERSORT_data/spots_matrix.tsv",
+                   col_names = TRUE)
+
+# Just 10 synthetic mixtures
+synthetic_mixtures[[1]][, 1:10] %>%
+  data.frame() %>%
+  tibble::rownames_to_column("gene") %>%
+  readr::write_tsv(.,
+                   file = "analysis/tool_benchmarking/CIBERSORT_data/spots_matrix_10.tsv",
+                   col_names = TRUE)
+
+```
+
+## Run CIBERSORT
+We are going to rund CIBERSORT with default parameters.
+```{r}
+CIBERSORT_deconv <- CIBERSORT(
+  sig_matrix = "analysis/tool_benchmarking/CIBERSORT_data/sig_matrix.tsv",
+  mixture_file = "analysis/tool_benchmarking/CIBERSORT_data/spots_matrix_10.tsv"
+  )
+```
+
+### Save results
+```{r}
+saveRDS(object = CIBERSORT_deconv,
+        file = here::here(sprintf("%s/%s/cibersort_deconv.RDS", an_tools, robj_dir)))
+```

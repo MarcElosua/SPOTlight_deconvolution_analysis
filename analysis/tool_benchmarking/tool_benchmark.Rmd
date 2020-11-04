@@ -1,0 +1,334 @@
+---
+title: "Tool benchmark"
+author: "Marc Elosua-Bayes"
+date: "7/17/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+In this Rmarkdown document we will compare the performance of the different tools used to deconvolute mixtures.
+
+## Libraries
+```{r}
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+```
+
+## Parameters
+```{r}
+tech <- "QUARTZ-seq"
+org <- "hs"
+tissue <- "pbmc"
+dwn_smplng <- "both"
+source(here::here("misc/paths_vrs.R"))
+
+if (! file.exists(sprintf("analysis/%s/%s", an_tools, plt_dir))) {
+  dir.create(here::here(sprintf("analysis/%s/%s", an_tools, plt_dir)),
+             showWarnings = FALSE,
+             recursive = TRUE)
+  dir.create(here::here(sprintf("analysis/tool_benchmarking/%s", robj_dir)),
+             showWarnings = FALSE,
+             recursive = TRUE)
+}
+```
+
+Color palette to use for each technology
+```{r}
+techs <- c("SPOTlight", "MuSiC weighted", "MuSiC all genes", "SCDC", "NMFreg",
+           "DeconRNAseq", "RCTD", "CIBERSORT", "CIBERSORTx")
+
+set1 <- RColorBrewer::brewer.pal(9, "Set1")
+
+col_df <- data.frame("Tool" = techs,
+                     "color" = set1)
+```
+
+## Load data
+Here we are loading the scRNAseq seurat object from QUARTZ-seq and the common synthetic spots. Both generated in the common_synthetic_spots.Rmd markdown document in this folder.
+```{r}
+se_quartz <- readRDS(file = here::here(sprintf("%s/%s/se_quartz.RDS", an_tools, robj_dir)))
+
+synthetic_mixtures <- readRDS(file = here::here(sprintf("%s/%s/common_synthetic_mixtures.RDS", an_tools, robj_dir)))
+synthetic_comp <- as.matrix(synthetic_mixtures[[2]] / rowSums(synthetic_mixtures[[2]]))
+```
+
+We also load the deconvolution outputs from the different tools.
+```{r}
+# MuSiC
+music_deconv <- readRDS(file = here::here(sprintf("%s/%s/music_deconv.RDS",
+                                                  an_tools, robj_dir)))
+music_mtrx_w <- music_deconv[["Est.prop.weighted"]]
+colnames(music_mtrx_w) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
+                                            x = colnames(music_mtrx_w),
+                                            perl = TRUE)
+
+music_mtrx_a <- music_deconv[["Est.prop.allgene"]]
+colnames(music_mtrx_a) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
+                                            x = colnames(music_mtrx_a),
+                                            perl = TRUE)
+# SPOTlight
+spotlight_deconv <- readRDS(
+  file = here::here(sprintf("%s/%s/spotlight_deconv.RDS",
+                            an_tools, robj_dir)))
+spotlight_mtrx <- spotlight_deconv[[2]]
+
+# SCDC
+scdc_obj <- readRDS(
+  file = here::here(sprintf("%s/%s/scdc_deconv.RDS",
+                            an_tools, robj_dir)))
+
+scdc_deconv <- scdc_obj$prop.est.mvw
+colnames(scdc_deconv) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
+                                            x = colnames(scdc_deconv),
+                                            perl = TRUE)
+
+# NMFreg
+nmfreg_deconv <- readRDS(
+  file = here::here(sprintf("%s/%s/nmfreg_ls_deconv.RDS",
+                            an_tools, robj_dir)))
+nmfreg_mtrx <- nmfreg_deconv[[2]]
+
+# deconRNAseq
+deconrnaseq_deconv <- readRDS(
+  file = here::here(sprintf("%s/%s/deconrnaseq_deconv.RDS",
+                 an_tools, robj_dir)))
+deconrnaseq_mtrx <- deconrnaseq_deconv[["out.all"]]
+colnames(deconrnaseq_mtrx) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
+                                            x = colnames(deconrnaseq_mtrx),
+                                            perl = TRUE)
+
+# RCTD
+myRCTD <- readRDS(
+  file = here::here(sprintf("%s/%s/rctd_deconv.RDS",
+                            an_tools, robj_dir)))
+rctd_deconv <- myRCTD@results$weights
+
+colnames(rctd_deconv) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
+                              x = colnames(rctd_deconv),
+                              perl = TRUE)
+
+# # CIBERSORT
+# CIBERSORT_deconv <- readRDS(
+#   file = here::here(sprintf("%s/%s/cibersort_deconv.RDS",
+#                             an_tools, robj_dir)))
+
+# CIBERSORTx
+CIBERSORTx_deconv <- readr::read_tsv(
+  file = here::here(sprintf("%s/%s/CIBERSORTx_Results.txt",
+                            an_tools, robj_dir)),
+  col_names = TRUE) %>%
+  tibble::column_to_rownames("Mixture") %>%
+  as.matrix()
+
+colnames(CIBERSORTx_deconv) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
+                              x = colnames(CIBERSORTx_deconv),
+                              perl = TRUE)
+
+```
+
+Note on CIBERSORTx we need to run the signature matrix in the CIBERSORTx website since it doesn't work another way.
+
+## Visualization comparison
+### Performance comparison
+```{r}
+tech_ls <- list(
+  "MuSiC weighted" = music_mtrx_w,
+  "MuSiC all genes" = music_mtrx_a,
+  "SPOTlight" = spotlight_mtrx,
+  "SCDC" = scdc_deconv,
+  "NMFreg" = nmfreg_mtrx,
+  "DeconRNAseq" = deconrnaseq_mtrx,
+  "RCTD" = rctd_deconv,
+  # "CIBERSORT" = NULL,
+  "CIBERSORTx" = CIBERSORTx_deconv)
+```
+
+```{r}
+output_ls <- lapply(names(tech_ls), function(i) {
+  print(i)
+  mtrx <- tech_ls[[i]]
+  
+  if(!is.null(mtrx)) {
+    tmp <- SPOTlight::test_synthetic_performance(
+      test_spots_metadata_mtrx = as.matrix(mtrx[, colnames(synthetic_comp)]),
+      spot_composition_mtrx = synthetic_comp)
+  } else { tmp <- NULL}
+  
+  return(tmp)
+})
+
+names(output_ls) <- names(tech_ls)
+```
+
+### Plot classification metrics
+Process the dataframe to get it in tidyverse format
+```{r}
+metrics_df <- lapply(names(output_ls), function(i) {
+  print(i)
+  if (!is.null(output_ls[[i]])) {
+    tmp_df <- data.frame(output_ls[[i]][1:4])
+    tmp_df$Tool <- i
+  } else {
+    tmp_df <- data.frame(TP = NA, TN = NA, FP = NA, FN = NA)
+    tmp_df$Tool <- i
+  }
+  return(tmp_df)
+}) %>% 
+  dplyr::bind_rows() %>% 
+  dplyr::mutate(
+      accuracy = round((TP + TN) / (TP + TN + FP + FN), 2),
+      sensitivity = round(TP / (TP + FN), 2),
+      specificity = round(TN / (TN + FP), 2),
+      precision = round(TP / (TP + FP), 2),
+      F1 = round(2 * ((precision * sensitivity) / (precision + sensitivity)), 2)
+  ) %>%
+  tidyr::pivot_longer(cols = c(accuracy, sensitivity, specificity, F1),
+                      names_to = "metric",
+                      values_to = "value") %>% 
+dplyr::mutate(
+  metric = dplyr::if_else(metric == "accuracy", "Accuracy", metric),
+  metric = dplyr::if_else(metric == "sensitivity", "Sensitivity", metric),
+  metric = dplyr::if_else(metric == "specificity", "Specificity", metric),
+  metric = dplyr::if_else(metric == "F1", "F1 score", metric),
+)
+```
+
+Plot the results
+```{r fig.height=6, fig.width=9}
+metric_plt <- metrics_df %>%
+  dplyr::mutate(
+    Tool = factor(x = Tool,
+                  levels = techs)
+    ) %>%
+  ggplot() +
+    geom_point(aes(x = Tool,
+                   y = value,
+                   color = Tool),
+               size = 5,
+               alpha = 0.9) +
+    facet_wrap(. ~ metric) +
+    labs(title = "Deconvolution tool benchmarking",
+         x = "Tool",
+         y = "Metric Value") +
+    theme_classic() +
+    scale_color_brewer(palette = "Set1") +
+    theme(
+      strip.text = element_text(hjust = 0.5, size = 14, face = "bold"),
+      axis.text.x = element_text(size = 12, angle = 30, hjust = 1),
+      axis.text.y = element_text(size = 12),
+      axis.title = element_text(size = 15)
+      )
+
+metric_plt
+
+cowplot::save_plot(
+  filename = here::here(sprintf("%s/%s/class_benchmark.pdf",
+                     an_tools, plt_dir)),
+  plot = metric_plt,
+  base_height = 6,
+  base_width = 9)
+```
+
+## Compute JSD
+Next we're going to compute JSD index for all the predictions to assess how good the predicted proportions are
+```{r}
+get_jsd <- function(mtrx1, mtrx2) {
+  
+  ##### Get TRUE JSD between real-predicted proportions #####
+  # Initialize matrix
+  true_jsd_mtrx <- matrix(nrow = nrow(mtrx1), ncol = 2)
+  
+  # Loop over all the rows
+  for (i in seq_len(nrow(mtrx1))) {
+
+    # Create matrix to feed to JSD
+    x <- rbind(mtrx1[i, ],
+               mtrx2[i, ])
+
+    # Calculate JSD and save it in true_JSD_mtrx
+    if (sum(mtrx2[i, ]) > 0) {
+      true_jsd_mtrx[i, 1] <- suppressMessages(JSD(x = x, unit = "log2",
+                                                  est.prob = "empirical"))
+    } else {
+      true_jsd_mtrx[i, 1] <- 1
+    }
+  }
+  
+  return(true_jsd_mtrx)
+}
+
+JSD_df <- lapply(names(tech_ls), function(i) {
+    print(i)
+  
+    if(!is.null(tech_ls[[i]])) {
+      tmp <- get_jsd(mtrx1 = synthetic_comp,
+                 mtrx2 = tech_ls[[i]][, colnames(synthetic_comp)])
+      tmp[, 2] <- i
+    
+    } else {
+      tmp <- matrix(data = NA, nrow = 1000, ncol = 2)
+      tmp[, 2] <- i
+    }
+  
+  return(data.frame(tmp, stringsAsFactors = FALSE))
+}) %>% dplyr::bind_rows()
+
+colnames(JSD_df) <- c("JSD", "Tool")
+```
+
+Plot results
+```{r fig.height=7, fig.width=11}
+JSD_benchmark <- JSD_df %>%
+  dplyr::mutate(
+    JSD = as.numeric(JSD),
+    Tool = factor(x = Tool,
+                  levels = techs)) %>%
+  ggplot(aes(x = Tool,
+             y = JSD,
+             fill = Tool,
+             color = Tool)) +
+  geom_jitter(alpha = 0.5) +
+  geom_violin(alpha = 0.8) +
+  theme_classic() +
+  scale_fill_brewer(palette = "Set1") +
+  scale_color_brewer(palette = "Set1") +
+  theme(
+    strip.text = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.text.x = element_text(size = 12, angle = 30, hjust = 1),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 15)
+  )
+
+JSD_benchmark
+
+cowplot::save_plot(
+  filename = here::here(sprintf("%s/%s/JSD_benchmark.pdf",
+                     an_tools, plt_dir)),
+  plot = JSD_benchmark,
+  base_height = 7,
+  base_width = 11)
+```
+
+Look at dispersion statistics
+```{r}
+JSD_df %>%
+  filter(!is.na(JSD)) %>%
+  dplyr::mutate(JSD = as.numeric(JSD)) %>%
+  dplyr::group_by(Tool) %>%
+  dplyr::summarise(
+    Median = round(quantile(JSD, 0.5), 4),
+    Q25 = round(quantile(JSD, 0.25), 4),
+    Q75 = round(quantile(JSD, 0.75), 4)
+  ) %>%
+  dplyr::mutate(
+    JSD_quantile = sprintf("%s [%s-%s]",
+                           Median, Q25, Q75)
+  )
+```

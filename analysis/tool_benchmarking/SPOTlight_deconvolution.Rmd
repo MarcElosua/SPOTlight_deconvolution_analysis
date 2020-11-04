@@ -1,0 +1,113 @@
+---
+title: "SPOTlight deconvolution"
+author: "Marc Elosua-Bayes"
+date: "7/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+In this Rmarkdown document we are going to use SPOTlight to deconvolute mixtures of cells. Ultimately the goal is to compare the performance with SPOTlight and other deconvolution tools. We use a consesus set of 1000 spots made out of between 2-8 cells reflecting the composition of Visium's spot. Synthetic mixtures and scRNAseq datasets are common for all the tools and are generated in the script common_synthetic_spots.Rmd
+
+## Libraries
+```{r}
+library(SPOTlight)
+library(dplyr)
+library(ggplot2)
+library(Matrix)
+```
+
+## Parameters
+```{r}
+set.seed(321)
+tech <- "QUARTZ-seq"
+org <- "hs"
+tissue <- "pbmc"
+dwn_smplng <- "both"
+source(here::here("misc/paths_vrs.R"))
+
+if (! file.exists(here::here(sprintf("analysis/%s/%s", an_tools, plt_dir)))) {
+  dir.create(here::here(sprintf("analysis/%s/%s", an_tools, plt_dir)),
+             showWarnings = FALSE,
+             recursive = TRUE)
+  dir.create(here::here(sprintf("analysis/tool_benchmarking/%s", robj_dir)),
+             showWarnings = FALSE,
+             recursive = TRUE)
+}
+```
+
+## Load data
+Here we are loading the scRNAseq seurat object from QUARTZ-seq and the common synthetic spots. Both generated in the common_synthetic_spots.Rmd markdown document in this folder.
+```{r}
+se_quartz <- readRDS(file = here::here(sprintf("%s/%s/se_quartz.RDS", an_tools, robj_dir)))
+
+synthetic_mixtures <- readRDS(file = here::here(sprintf("%s/%s/common_synthetic_mixtures.RDS", an_tools, robj_dir)))
+```
+
+## Run SPOTlight
+1st we need to find the marker genes for each cell type
+```{r}
+se_quartz <- Seurat::SCTransform(object = se_quartz,
+                                 assay = "RNA")
+
+Seurat::Idents(se_quartz) <- se_quartz$nnet2
+marker_genes <- Seurat::FindAllMarkers(object = se_quartz,
+                                       assay = "SCT",
+                                       slot = "data",
+                                       min.pct = 0,
+                                       only.pos = TRUE,
+                                       logfc.threshold = 0)
+
+marker_genes %>% dplyr::count(cluster)
+
+marker_genes_filt <- marker_genes %>%
+  dplyr::filter(pct.1 > 0.9)
+
+marker_genes_filt %>% dplyr::count(cluster)
+```
+
+Run SPOTlight
+```{r}
+spotlight_ls <- SPOTlight::spotlight_deconvolution(se_sc = se_quartz,
+                                   counts_spatial = synthetic_mixtures[[1]],
+                                   clust_vr = "nnet2",
+                                   cluster_markers = marker_genes,
+                                   cl_n = 100,
+                                   hvg = 3000,
+                                   ntop = NULL,
+                                   transf = "uv",
+                                   method = "nsNMF",
+                                   min_cont = 0.09,
+                                   assay = "RNA",
+                                   slot = "counts")
+
+saveRDS(object = spotlight_ls,
+        file = here::here(sprintf("%s/%s/spotlight_deconv.RDS", an_tools, robj_dir)))
+```
+
+```{r}
+h <- NMF::coef(spotlight_ls[[1]][[1]])
+train_labs <- spotlight_ls[[1]][[2]]
+
+profile_plt <- SPOTlight::dot_plot_profiles_fun(
+  h = h,
+  train_cell_clust = train_labs)
+
+profile_plt[[2]]
+```
+
+Extract parts and assess performance
+```{r}
+spotlight_deconv <- spotlight_ls[[2]][, colnames(spotlight_ls[[2]]) != "res_ss"]
+synthetic_comp <- as.matrix(synthetic_mixtures[[2]] /
+                              rowSums(synthetic_mixtures[[2]]))
+
+colnames(spotlight_deconv); colnames(synthetic_comp)
+SPOTlight::test_synthetic_performance(
+  test_spots_metadata_mtrx = spotlight_deconv[, colnames(synthetic_comp)],
+  spot_composition_mtrx = synthetic_comp)
+```
+

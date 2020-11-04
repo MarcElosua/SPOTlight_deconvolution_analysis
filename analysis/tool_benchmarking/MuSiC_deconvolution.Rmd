@@ -1,0 +1,103 @@
+---
+title: "MuSiC deconvolution"
+author: "Marc Elosua-Bayes"
+date: "7/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+In this Rmarkdown document we are going to use MuSiC to deconvolute mixtures of cells. Ultimately the goal is to compare the performance with SPOTlight and other deconvolution tools. We use a consesus set of 1000 spots made out of between 2-8 cells reflecting the composition of Visium's spot. Synthetic mixtures and scRNAseq datasets are common for all the tools and are generated in the script common_synthetic_spots.Rmd
+
+## Libraries
+Install MuSiC from GitHub
+https://xuranw.github.io/MuSiC/articles/MuSiC.html
+```{r}
+# install the MuSiC package
+devtools::install_github('xuranw/MuSiC')
+
+# load
+library(MuSiC)
+```
+
+```{r}
+library(SPOTlight)
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(Matrix)
+```
+
+## Parameters
+```{r}
+set.seed(321)
+tech <- "QUARTZ-seq"
+org <- "hs"
+tissue <- "pbmc"
+dwn_smplng <- "both"
+source(here::here("misc/paths_vrs.R"))
+
+if (! file.exists(here::here(sprintf("analysis/%s/%s", an_tools, plt_dir)))) {
+  dir.create(sprintf("analysis/%s/%s", an_tools, plt_dir),
+             showWarnings = FALSE,
+             recursive = TRUE)
+  dir.create(here::here(sprintf("analysis/tool_benchmarking/%s", robj_dir)),
+             showWarnings = FALSE,
+             recursive = TRUE)
+}
+```
+
+## Load data
+Here we are loading the scRNAseq seurat object from QUARTZ-seq and the common synthetic spots. Both generated in the common_synthetic_spots.Rmd markdown document in this folder.
+```{r}
+se_quartz <- readRDS(file = here::here(sprintf("%s/%s/se_quartz.RDS", an_tools, robj_dir)))
+
+synthetic_mixtures <- readRDS(file = here::here(sprintf("%s/%s/common_synthetic_mixtures.RDS", an_tools, robj_dir)))
+```
+
+
+## Run MuSiC
+1st we need to conver our data to ExpressionSet format
+```{r}
+se_quartz[["barcode"]] <- colnames(se_quartz)
+expr_sc <- Biobase::ExpressionSet(assayData = as.matrix(se_quartz@assays$RNA@counts),
+                                  phenoData = Biobase::AnnotatedDataFrame(data = se_quartz@meta.data))
+
+expr_mix <- Biobase::ExpressionSet(assayData = as.matrix(synthetic_mixtures[[1]]))
+```
+
+Run deconvolution
+```{r}
+strt <- Sys.time()
+library(xbioc)
+music_deconv <- MuSiC::music_prop(bulk.eset = expr_mix,
+                                  sc.eset = expr_sc,
+                                  markers = NULL,
+                                  clusters = "nnet2",
+                                  samples = "barcode",
+                                  select.ct = NULL,
+                                  verbose = TRUE)
+tot_time <- difftime(time1 = Sys.time(),
+                     time2 = strt,
+                     units = "min")
+
+saveRDS(object = music_deconv,
+        file = here::here(sprintf("%s/%s/music_deconv.RDS", an_tools, robj_dir)))
+```
+
+Extract parts and assess performance
+```{r}
+music_pred <- music_deconv[["Est.prop.weighted"]]
+synthetic_comp <- synthetic_mixtures[[2]] / rowSums(synthetic_mixtures[[2]])
+
+SPOTlight::test_synthetic_performance(test_spots_metadata_mtrx = music_pred,
+                                      spot_composition_mtrx = as.matrix(synthetic_comp))
+
+is(music_pred)
+is(synthetic_comp)
+```
+
+

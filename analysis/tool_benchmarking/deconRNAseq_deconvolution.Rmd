@@ -1,0 +1,96 @@
+---
+title: "DeconRNAseq deconvolution"
+author: "Marc Elosua-Bayes"
+date: "7/16/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+In this Rmarkdown document we are going to use DeconRNAseq to deconvolute mixtures of cells. Ultimately the goal is to compare the performance with SPOTlight and other deconvolution tools. We use a consesus set of 1000 spots made out of between 2-8 cells reflecting the composition of Visium's spot. Synthetic mixtures and scRNAseq datasets are common for all the tools and are generated in the script common_synthetic_spots.Rmd
+
+## Libraries
+Install SCDC package
+https://github.com/meichendong/SCDC
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+
+BiocManager::install("DeconRNASeq")
+library(DeconRNASeq)
+```
+
+```{r}
+library(SPOTlight)
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(Matrix)
+```
+
+## Parameters
+```{r}
+set.seed(321)
+tech <- "QUARTZ-seq"
+org <- "hs"
+tissue <- "pbmc"
+dwn_smplng <- "both"
+source(here::here("misc/paths_vrs.R"))
+
+if (! file.exists(here::here(sprintf("analysis/%s/%s", an_tools, plt_dir)))) {
+  dir.create(here::here(sprintf("analysis/%s/%s", an_tools, plt_dir)),
+             showWarnings = FALSE,
+             recursive = TRUE)
+  dir.create(here::here(sprintf("analysis/tool_benchmarking/%s", robj_dir)),
+             showWarnings = FALSE,
+             recursive = TRUE)
+}
+```
+
+## Load data
+Here we are loading the scRNAseq seurat object from QUARTZ-seq and the common synthetic spots. Both generated in the common_synthetic_spots.Rmd markdown document in this folder.
+```{r}
+se_quartz <- readRDS(file = here::here(sprintf("%s/%s/se_quartz.RDS", an_tools, robj_dir)))
+
+synthetic_mixtures <- readRDS(file = here::here(sprintf("%s/%s/common_synthetic_mixtures.RDS", an_tools, robj_dir)))
+```
+
+## DeconRNAseq deconvolution
+Create signatures averaging the transcriptomes of 50 random cells per cell types. If one cell type doesn't have enough cell it grabs all of them.
+```{r}
+ct <- "HEK cells"
+sign_mtrx <- lapply(unique(se_quartz$nnet2), function(ct) {
+  
+  if (sum(se_quartz$nnet2 == ct) > 50) n <- 50 else n <- sum(se_quartz$nnet2 == ct)
+  
+  keep_id <- base::sample(x = colnames(se_quartz[, se_quartz$nnet2 == ct]), size = n)
+  tmp_se <- se_quartz[, keep_id]
+  
+  mtrx <- as.matrix(rowMeans(tmp_se@assays$RNA@counts))
+  colnames(mtrx) <- ct
+  return(mtrx)
+}) %>% dplyr::bind_cols() %>% as.data.frame()
+
+colnames(sign_mtrx) <- unique(se_quartz$nnet2)
+```
+
+carry out deconvolution
+```{r}
+deconrnaseq_ls <- DeconRNASeq::DeconRNASeq(datasets = as.data.frame(synthetic_mixtures[[1]]),
+                         signatures = sign_mtrx)
+saveRDS(object = deconrnaseq_ls,
+        file = here::here(sprintf("%s/%s/deconrnaseq_deconv.RDS", an_tools, robj_dir)))
+```
+
+## Assess performance
+```{r}
+synthetic_comp <- as.matrix(synthetic_mixtures[[2]] / rowSums(synthetic_mixtures[[2]]))
+
+colnames(deconrnaseq_ls[["out.all"]]); colnames(synthetic_comp)
+SPOTlight::test_synthetic_performance(test_spots_metadata_mtrx = deconrnaseq_ls[["out.all"]],
+                                      spot_composition_mtrx = synthetic_comp)
+
+```
+
