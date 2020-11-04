@@ -265,10 +265,11 @@ ct_topic_profiles <- topic_profile_per_cluster_nmf(h = h,
                               clust_vr = clust_vr)
 
 decon_mtrx <- mixture_deconvolution_nmf(nmf_mod = nmf_mod,
-                          mixture_transcriptome = spot_counts,
-                          transf = transf,
-                          reference_profiles = ct_topic_profiles, 
-                          min_cont = 0.09)
+                                        clust_vr = clust_vr,
+                                        mixture_transcriptome = spot_counts,
+                                        transf = transf,
+                                        reference_profiles = ct_topic_profiles,
+                                        min_cont = 0.09)
 saveRDS(decon_mtrx,
         sprintf("decon_mtrx_%s_%s.RDS", id_comp, id_nmf))
 

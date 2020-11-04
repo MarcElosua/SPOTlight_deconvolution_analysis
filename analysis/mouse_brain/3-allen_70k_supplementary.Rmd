@@ -228,7 +228,8 @@ ct_arrange <- lapply(cell_types, function(ct) {
                                 nrow = 1, 
                                 ncol = 2, 
                                 align = "hv",
-                                labels = ct_df[ct_df$ct_names == ct, "plt_names"], label_size = 10
+                                labels = ct_df[ct_df$ct_names == ct, "plt_names"],
+                                label_size = 15
                                 ) + 
     # theme(plot.margin = unit(c(1,1,1,1), "line"))
     theme(plot.margin = unit(c(0.2,0.2,0.2,0.2), "line"))
@@ -250,12 +251,11 @@ ct_arrange <- lapply(cell_types, function(ct) {
 #        height = 600,
 #        units = "mm")
 
-ggpubr::ggexport(plotlist = list(ct_arrange),
-                 filename = sprintf("%s/%s/Supplementary_Figure_AAA_all_cell_types_grid_%s_%s.pdf", 
-                               an_mouse, plt_dir, id_comp, id_nmf), 
-                 width = 24,
-                 height = 24,
-                 res = 600)
+cowplot::save_plot(plot =  ct_arrange,
+                   filename = sprintf("%s/%s/Supplementary_Figure_AAA_all_cell_types_grid_%s_%s.svg",
+                                      an_mouse, plt_dir, id_comp, id_nmf), 
+                   base_width = 24,
+                   base_height = 24)
 
 ggpubr::ggexport(plotlist = list(ct_arrange),
                  filename = sprintf("%s/%s/Supplementary_Figure_AAA_all_cell_types_grid_%s_%s.jpeg",
@@ -327,31 +327,28 @@ topic_plt_arr <- lapply(seq_len(10), function(i) {
                       clust_vr = clust_vr)
   
   tmp_plt <- topic_profile_plts[[2]] +
-    # scale_size(limits = c(0, 1)) +
+    scale_size(limits = c(0, 1)) +
     labs(title = sprintf("Topic Profiles: Iteration %s", i)) +
     theme(
       plot.title = element_text(hjust = 0.5, size = 15),
-      axis.text.x = element_text(angle = 90, vjust = 0.5, size = 5),
-      axis.text.y = element_text(size = 4))
+      axis.text.x = element_text(angle = 90, hjust = 1, size = 10),
+      axis.text.y = element_text(size = 10))
   
   return(tmp_plt)
 }) %>% ggpubr::ggarrange(plotlist = ., ncol = 3, nrow = 4)
 
 
-ggpubr::ggexport(plotlist = list(topic_plt_arr),
-                 filename = sprintf("%s/%s/Supplementary_Figure_FFF_topic_signatures_arrange_10_%s_%s_.pdf", 
+cowplot::save_plot(filename = sprintf("%s/%s/Supplementary_Figure_FFF_topic_signatures_arrange_10_%s_%s_.pdf", 
                      an_mouse, plt_dir, id_comp, id_nmf_iter),
-                 width = 36,
-                 height = 36,
-                 res = 900)
+                  plot = topic_plt_arr,
+                 base_width = 24,
+                 base_height = 30)
 
-ggpubr::ggexport(plotlist = list(topic_plt_arr),
-                 filename = sprintf("%s/%s/Supplementary_Figure_FFF_topic_signatures_arrange_10_%s_%s_.jpeg", 
+cowplot::save_plot(filename = sprintf("%s/%s/Supplementary_Figure_FFF_topic_signatures_arrange_10_%s_%s_.svg", 
                      an_mouse, plt_dir, id_comp, id_nmf_iter),
-                 pointsize = 2,
-                 width = 4000,
-                 height = 5000,
-                 res = 300)
+                  plot = topic_plt_arr,
+                 base_width = 24,
+                 base_height = 30)
 
 ```
 
@@ -394,6 +391,12 @@ ggpubr::ggexport(plotlist = list(all_cell_prof_plt),
                  width = 32,
                  height = 32,
                  res = 600)
+
+cowplot::save_plot(plot = all_cell_prof_plt,
+                 filename = sprintf("%s/%s/Supplementary_Figure_GGG_all_cell_topic_profile_%s_%s.svg", 
+                                    an_mouse, plt_dir, id_comp, id_nmf_iter),
+                 base_width = 32,
+                 base_height = 32)
 
 
 ggpubr::ggexport(plotlist = list(all_cell_prof_plt),

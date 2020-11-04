@@ -50,7 +50,6 @@ id_nmf <- sprintf("cln-%s_transf-%s_method-%s_hvg-%s_FC-%s_pct1-%s",
 data_dir <- "data/MusMusculus/allen_reference"
 options(stringsAsFactors = FALSE)
 
-
 library(RColorBrewer)
 n <- 60
 qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
@@ -96,7 +95,7 @@ st_a_list <- sapply(sample_pdac_a, USE.NAMES = TRUE, function(geo) {
   
   st_se <- Spaniel::createSeurat(counts = st_tibble, 
                barcodeFile = sprintf("%s/spatial/tissue_positions_list_spatial_object.tsv", geo_path), 
-               projectName = "PDAC-B",
+               projectName = "PDAC-A",
                sectionNumber = "1")
   st_se <- Seurat::ScaleData(st_se)
 
@@ -109,6 +108,9 @@ st_a_list <- sapply(sample_pdac_a, USE.NAMES = TRUE, function(geo) {
   st_se$slice <- sample_dict[[geo]]
   return(list(st_se))
 })
+
+saveRDS(object = st_a_list,
+        file = sprintf("~/Desktop/Itai_files/PDAC-A_ST_list.RDS"))
 ```
 
 ST data for PDAC-B:
@@ -138,6 +140,8 @@ st_b_list <- sapply(sample_pdac_b, USE.NAMES = TRUE, function(geo) {
   st_se$slice <- sample_dict[[geo]]
   return(list(st_se))
 })
+saveRDS(object = st_b_list,
+        file = sprintf("~/Desktop/Itai_files/PDAC-B_ST_list.RDS"))
 ```
 
 

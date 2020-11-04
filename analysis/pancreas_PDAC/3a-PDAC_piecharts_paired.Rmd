@@ -203,14 +203,19 @@ scatterpie_arrange_plt <- lapply(sample_pdac, function(geo) {
   # tmp_plt <- ggdraw(tmp_grob)
 
   return(scatterpie_plt)
-}) %>% 
-  cowplot::plot_grid(plotlist = .,
+})
+  
+
+saveRDS(object = scatterpie_arrange_plt,
+        file = sprintf("%s/%s/Supplementary_Figure_GGG_scatterpie_arrangement_paired.pdf",
+                                    an_pdac, plt_dir))
+
+cowplot::plot_grid(plotlist = scatterpie_arrange_plt,
                     ncol = 3,
                     nrow = 2,
                     align = "vh", 
-                   axis = "trbl")
-
-ggpubr::ggexport(scatterpie_arrange_plt,
+                   axis = "trbl") %>% 
+  ggpubr::ggexport(.,
                  filename = sprintf("%s/%s/Supplementary_Figure_GGG_scatterpie_arrangement_paired.pdf",
                                     an_pdac, plt_dir),
                  width = 24,

@@ -175,7 +175,7 @@ st_list <- sapply(sample_pdac, USE.NAMES = TRUE, function(geo) {
                barcodeFile = sprintf("%s/spatial/tissue_positions_list_spatial_object.tsv", geo_path), 
                projectName = "PDAC-B",
                sectionNumber = "1")
-  st_se <- Seurat::SCTransform(st_se)
+  # st_se <- Seurat::SCTransform(st_se)
 
   ### Load histological image into R
   fn_image <- list.files(path = sprintf("%s/spatial", geo_path), pattern = "lowres_rot.jpg$")[1]
@@ -324,6 +324,10 @@ save_as_image(cell_type_table_b,
 ```{r}
 umap_pdac_a <- DimPlot(indrop_pdac_a, reduction = "umap", group.by = "annotation", label = FALSE) +
   scale_color_manual(values = df_col[df_col$plt_name %in% indrop_pdac_a$annotation, "col_ct"])
+
+saveRDS(object = umap_pdac_a,
+        file = sprintf("%s/%s/Supplementary_Figure_PPP_UMAP_PDAC-A.RDS",
+                                    an_pdac, plt_dir))
 
 ggpubr::ggexport(plotlist = list(umap_pdac_a), 
                  filename = sprintf("%s/%s/Supplementary_Figure_PPP_UMAP_PDAC-A.pdf",
@@ -563,15 +567,14 @@ paired_ct_plts <- lapply(names(paired_decon_mtrx_ls), function(geo) {
   # st_se@assays$RNA@data <- t(decon_mtrx)
   
   ct_plt <- lapply(cell_types, function(ct){
-    print(ct)
+    # print(ct)
     
     tmp_plt <- plot_spaniel(data_df = data.frame(st_se@meta.data),
                  grob = st_se@images[[1]],
                  x = "x",
                  y = "y",
                  point_colour = ct,
-                 point_size = ct,
-                 point_alpha = ct) +
+                 point_size = ct) +
       ggplot2::theme_void() +
       ggplot2::labs(title = sprintf("Proportion of %s", 
                                   # sample_dict[[geo]], 
@@ -615,6 +618,10 @@ paired_ct_plts <- lapply(names(paired_decon_mtrx_ls), function(geo) {
 
 names(paired_ct_plts) <- names_ls
 
+saveRDS(object = paired_ct_plts[["GSM3036911"]],
+        file = sprintf("%s/%s/paired_cell_type_location_plts_GSM3036911.RDS",
+                                      an_pdac, plt_dir))
+
 lapply(names(paired_ct_plts), function(geo) {
   plt_ls <- paired_ct_plts[[geo]]
   ct_arr <- ggpubr::ggarrange(plotlist = plt_ls,
@@ -628,12 +635,12 @@ lapply(names(paired_ct_plts), function(geo) {
                    height = 18,
                    res = 600)
   
-  ggpubr::ggexport(ct_arr,
-                   filename = sprintf("%s/%s/Supplementary_Figure_DDD_paired_cell_type_arrange_plts_%s.jpeg", 
-                                      an_pdac, plt_dir, geo),
-                   width = 5000,
-                   height = 4000,
-                   res = 300)
+  # ggpubr::ggexport(ct_arr,
+  #                  filename = sprintf("%s/%s/Supplementary_Figure_DDD_paired_cell_type_arrange_plts_%s.jpeg", 
+  #                                     an_pdac, plt_dir, geo),
+  #                  width = 5000,
+  #                  height = 4000,
+  #                  res = 300)
 })
 ```
 

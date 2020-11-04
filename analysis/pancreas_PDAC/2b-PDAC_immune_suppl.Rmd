@@ -130,7 +130,7 @@ st_list <- sapply(sample_geo, USE.NAMES = TRUE, function(geo) {
                barcodeFile = sprintf("%s/spatial/tissue_positions_list_spatial_object.tsv", geo_path), 
                projectName = "PDAC-B",
                sectionNumber = "1")
-  st_se <- Seurat::SCTransform(st_se)
+  # st_se <- Seurat::SCTransform(st_se)
 
   ### Load histological image into R
   fn_image <- list.files(path = sprintf("%s/spatial", geo_path), pattern = "lowres_rot.jpg$")[1]
@@ -262,6 +262,11 @@ ica_umap <- DimPlot(ica_se,
   theme_void()
 
 ica_umap
+
+saveRDS(object = ica_umap,
+        file = sprintf("%s/%s/immune_cells_UMAP.RDS",
+                                    an_pdac, plt_dir))
+
 ggpubr::ggexport(plotlist = list(ica_umap),
                  filename = sprintf("%s/%s/immune_cells_UMAP.pdf",
                                     an_pdac, plt_dir),
@@ -350,18 +355,18 @@ names(immune_gene_plts) <- names_ls
 ##### Plot cell type signature
 
 Add signature to plot name dataframe
-```{r}
+```{r eval = FALSE}
 pdac_plt_names$firm_name <- paste(pdac_plt_names$df_nam, "signature1", sep = "_")
 pdac_plt_names$firm_plot <- paste(pdac_plt_names$plt_name, "Signature", sep = " ")
 ```
 
 Marker genes
-```{r}
+```{r eval = FALSE}
 immune_markers <- readRDS("analysis/pancreas_PDAC/data/Atlas_specific_markers_150.rds")
 ```
 
 ##### Signature plot list
-```{r}
+```{r eval = FALSE}
 immune_signature_plts <- lapply(names(immune_decon_mtrx_ls), function(geo) {
   # print(geo)
   decon_mtrx <- immune_decon_mtrx_ls[[geo]]
@@ -496,8 +501,7 @@ immune_ct_plts <- lapply(names(immune_decon_mtrx_ls), function(geo) {
                x = "x",
                y = "y",
                point_colour = ct,
-               point_size = ct,
-               point_alpha = ct) +
+               point_size = ct) +
     ggplot2::scale_size_continuous(range=c(0, 1), limits = c(0, 1)) +
     ggplot2::theme_void() +
     ggplot2::labs(title = sprintf("Proportion of %s", 
@@ -540,13 +544,17 @@ immune_ct_plts <- lapply(names(immune_decon_mtrx_ls), function(geo) {
     })
   })
 
-names(immune_ct_plts) <- names_ls
+names(immune_ct_plts) <- names(immune_decon_mtrx_ls)
+
+saveRDS(object = immune_ct_plts[["GSM3036911"]],
+        file = sprintf("%s/%s/immune_cell_type_location_plts_GSM3036911.RDS",
+                                      an_pdac, plt_dir))
 
 lapply(names(immune_ct_plts), function(geo) {
   plt_ls <- immune_ct_plts[[geo]]
   ct_arr <- ggpubr::ggarrange(plotlist = plt_ls,
-                    ncol = 4,
-                    nrow = 6,
+                    ncol = 5,
+                    nrow = 5,
                     align = "hv")
   
   ggpubr::ggexport(ct_arr, 
@@ -556,18 +564,18 @@ lapply(names(immune_ct_plts), function(geo) {
                    height = 18,
                    res = 600)
   
-  ggpubr::ggexport(ct_arr, 
-                   filename = sprintf("%s/%s/immune_cell_type_arrange_plts_%s.jpeg", 
-                                      an_pdac, plt_dir, geo),
-                   width = 5000,
-                   height = 4000,
-                   res = 400)
+  # ggpubr::ggexport(ct_arr, 
+  #                  filename = sprintf("%s/%s/immune_cell_type_arrange_plts_%s.jpeg", 
+  #                                     an_pdac, plt_dir, geo),
+  #                  width = 5000,
+  #                  height = 4000,
+  #                  res = 400)
 })
 
 ```
 
 ### Join signature - location
-```{r}
+```{r eval = FALSE}
 lapply(names(immune_ct_plts), function(geo) {
 
     # Plot each cell type with its marker gene
@@ -644,7 +652,7 @@ immune_hmp_plts %>%
 ```
 
 ### Interaction Graph
-```{r}
+```{r eval = FALSE}
 get_spatial_interaction_graph <- function(decon_mtrx) {
 
   # Check variables
@@ -713,7 +721,7 @@ get_spatial_interaction_graph <- function(decon_mtrx) {
 }
 ```
 
-```{r}
+```{r eval = FALSE}
 pdf(sprintf("%s/%s/Suppl_Fig_MMM_interaction_graph_immune_arrange.pdf", an_pdac, plt_dir), 
     width = 16,
     height = 12)

@@ -145,7 +145,7 @@ st_list <- sapply(sample_geo, USE.NAMES = TRUE, function(geo) {
                barcodeFile = sprintf("%s/spatial/tissue_positions_list_spatial_object.tsv", geo_path), 
                projectName = "PDAC-B",
                sectionNumber = "1")
-  st_se <- Seurat::SCTransform(st_se)
+  # st_se <- Seurat::SCTransform(st_se)
 
   ### Load histological image into R
   fn_image <- list.files(path = sprintf("%s/spatial", geo_path), pattern = "lowres_rot.jpg$")[1]
@@ -242,14 +242,18 @@ scatterpie_arrange_plt <- lapply(sample_pdac, function(geo) {
                      
 
   return(scatterpie_plt)
-}) %>% 
-  cowplot::plot_grid(plotlist = .,
-                    ncol = 3,
-                    nrow = 2,
-                    align = "vh", 
-                   axis = "trbl")
+})
 
-ggpubr::ggexport(scatterpie_arrange_plt,
+saveRDS(object = scatterpie_arrange_plt,
+        file = sprintf("%s/%s/Supplementary_Figure_GGG_scatterpie_arrangement_immune.RDS",
+                                    an_pdac, plt_dir))
+
+cowplot::plot_grid(plotlist = scatterpie_arrange_plt,
+                  ncol = 3,
+                  nrow = 2,
+                  align = "vh", 
+                 axis = "trbl") %>% 
+  ggpubr::ggexport(.,
                  filename = sprintf("%s/%s/Supplementary_Figure_GGG_scatterpie_arrangement_immune.pdf",
                                     an_pdac, plt_dir),
                  width = 24,

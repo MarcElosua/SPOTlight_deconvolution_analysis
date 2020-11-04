@@ -12,9 +12,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ## Introduction
 
 In this Rmarkdown document we will divide the spots into cancer and non-cancer and then check if there is immune cell enrichment in one of the 2 bins.
-
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
 library(dplyr)
 library(NMF)
 library(purrr)
@@ -28,6 +26,7 @@ library(flextable)
 source("utils/bin.r")
 source("utils/spatial_plot_spaniel.R")
 ```
+
 Paths
 ```{r}
 #### Setting vrs ####
@@ -177,6 +176,28 @@ lapply(c("GSM3036911", "GSM4100723"), function(geo) {
        main = sprintf("%s spatial interaction network",geo ))
   
   dev.off()
+  
+  pdf(sprintf("%s/%s/Suppl_Fig_MMM_interaction_graph_immune_arrange_%s.pdf", 
+               an_pdac, plt_dir, geo), 
+      width = 9,
+      height = 9)
+  
+  # Open a pdf file
+  plot(graph_ntw,
+       # Size of the edge
+       edge.width = edge_importance,
+       edge.color = color_edge,
+       # Size of the buble
+       vertex.size = deg/2,
+       vertex.color = "#cde394",
+       vertex.frame.color = "white",
+       vertex.label.color = "black",
+       vertex.label.family = "Helvetica", # Font family of the label (e.g.“Times”, “Helvetica”)
+       layout = layout.circle,
+       main = sprintf("%s spatial interaction network",geo ))
+  
+  dev.off()
+
 
 })
 

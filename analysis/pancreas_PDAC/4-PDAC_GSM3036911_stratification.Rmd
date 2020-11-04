@@ -96,15 +96,6 @@ st_list <- sapply(pdac_smpl, USE.NAMES = TRUE, function(geo) {
                projectName = "PDAC-B",
                sectionNumber = "1")
   
-  # Scale and normalize the data
-  st_se <- Seurat::SCTransform(st_se)
-  
-  # Dimensionality reduction
-  st_se <- RunPCA(st_se, assay = "SCT", verbose = FALSE)
-  st_se <- FindNeighbors(st_se, reduction = "pca", dims = 1:40)
-  st_se <- FindClusters(st_se, verbose = FALSE)
-  st_se <- RunUMAP(st_se, reduction = "pca", dims = 1:40)
-
   ### Load histological image into R
   fn_image <- list.files(path = sprintf("%s/spatial", geo_path), pattern = "lowres_rot.jpg$")[1]
   imgFile <- sprintf("%s/spatial/%s", geo_path, fn_image)
@@ -465,7 +456,14 @@ hm_tmp <- t(hm_df_2) %>%
         axis.title = element_text(size = 15),
         axis.line = element_blank())
 
-hm_tmp
+saveRDS(object = hm_tmp,
+        file = sprintf("%s/%s/heatmap_pvalue_GSM3036911_status_2_territories.RDS",
+                                    an_pdac, plt_dir))
+
+saveRDS(object = tmp_plt_2,
+        file = sprintf("%s/%s/GSM3036911_status_2_territories.RDS",
+                                    an_pdac, plt_dir))
+
 ggpubr::ggexport(plotlist = list(hm_tmp, tmp_plt_2),
                  filename = sprintf("%s/%s/heatmap_pvalue_GSM3036911_status_2_territories.pdf",
                                     an_pdac, plt_dir),
@@ -560,7 +558,8 @@ bplt <- decon_mtrx_long %>%
                   scales = "free",
                   # palette = "npg",
                   palette = c("#00A087FF", "#E64B35FF"),
-                  nrow = 2) +
+                  nrow = 2,
+                  outlier.shape = NA) +
   # ggplot2::facet_wrap(~plt_name) + 
   ggpubr::geom_signif(
     data = anno_df %>% filter(p.adj < 0.05 & plt_name != "MAST"), 
@@ -587,9 +586,14 @@ bplt <- bplt +
     legend.key.size = unit(3,"line"),
     # strip.text = element_text(face="bold", size=9),
     strip.background = element_rect(size = 0.3))
-bplt
+
+saveRDS(object = bplt,
+        file = sprintf("%s/%s/boxplot_GSM3036911_status_2_territories_filt.RDS",
+                       an_pdac, plt_dir))
+
+
 ggpubr::ggexport(plotlist = list(bplt),
-                 filename = sprintf("%s/%s/boxplot_GSM3036911_status_2_territories_filt.pdf",an_pdac, plt_dir),
+                 filename = ,
                  width = 16,
                  height = 12,
                  res = 600)
@@ -612,7 +616,8 @@ bplt <- decon_mtrx_long %>%
                   facet.by = "plt_name",
                   scales = "free",
                   # palette = "npg",
-                  palette = c("#00A087FF", "#E64B35FF")) +
+                  palette = c("#00A087FF", "#E64B35FF"),
+                  outlier.shape = NA) +
   # ggplot2::facet_wrap(~plt_name) + 
   ggpubr::geom_signif(
     data = anno_df, 
@@ -702,6 +707,9 @@ strat_3_plt <- data_df %>%
   theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 20))
 
 strat_3_plt
+saveRDS(object = strat_3_plt,
+        file = sprintf("%s/%s/GSM3036911_status_3_territories.RDS",
+                                    an_pdac, plt_dir))
 
 ggpubr::ggexport(plotlist = list(strat_3_plt +
                                    guides(color = guide_legend(override.aes = list(size = 10))) +
@@ -770,6 +778,10 @@ hm_tmp <- t(prop_df) %>%
 
 
 hm_tmp
+
+saveRDS(object = hm_tmp,
+        file = sprintf("%s/%s/heatmap_GSM3036911_status_3_territories.RDS", 
+                                      an_pdac, plt_dir))
 ggpubr::ggarrange(plotlist = list(hm_tmp, strat_3_plt),
                   labels = c("A", "B")) %>% 
   ggpubr::ggexport(.,
@@ -845,18 +857,18 @@ anno_df_wilcox <- ggpubr::compare_means(proportion ~ status_3_territories,
 ```
 
 ```{r}
-p <- ggpubr::ggboxplot(decon_mtrx_long, x = "status_3_territories", y = "proportion",
-                  color = "status_3_territories", fill = "status_3_territories",
-                  add = "jitter", alpha = 0.6,
-                  facet.by = "plt_name", scales = "free", 
-                  repel = TRUE, palette = c("#00A087FF", "#4DBBD5FF", "#E64B35FF"))
-
-# Create a box plot and add the p-value
-# p <- ggboxplot(
-#   decon_mtrx_long, x = "status_3_territories", y = "proportion",
-#   color = "status_3_territories", palette = "npg",
-#   facet.by = "plt_name", ylim = c(0, 1)
-# )
+p <- ggpubr::ggboxplot(decon_mtrx_long,
+                       x = "status_3_territories",
+                       y = "proportion",
+                       color = "status_3_territories",
+                       fill = "status_3_territories",
+                       add = "jitter",
+                       alpha = 0.6,
+                       facet.by = "plt_name",
+                       scales = "free",
+                       repel = TRUE,
+                       palette = c("#00A087FF", "#4DBBD5FF", "#E64B35FF"),
+                       outlier.shape = NA)
 
 bplt <- p + 
   ggpubr::stat_pvalue_manual(anno_df_wilcox, label = "p = {p.adj}", size = 6) +
@@ -876,7 +888,10 @@ bplt <- p +
     legend.title = element_text(size = 20),
     legend.key.size = unit(3,"line"))
 
-bplt
+
+saveRDS(object = bplt,
+        file = sprintf("%s/%s/boxplot_GSM3036911_status_3_territories.RDS",an_pdac, plt_dir))
+
 ggpubr::ggexport(plotlist = list(bplt),
                  filename = sprintf("%s/%s/boxplot_GSM3036911_status_3_territories.pdf",an_pdac, plt_dir),
                  width = 32,
@@ -891,4 +906,18 @@ ggpubr::ggexport(plotlist = list(bplt),
 
 ```
 
+
+##### Arrange 3 territory stratification
+```{r}
+cowplot::plot_grid(strat_3_plt + theme(plot.title = element_text(size = 20)),
+                   bplt,
+                   align = "h",
+                   nrow = 1,
+                   ncol = 2,
+                   rel_widths = c(1.25, 1)) %>% 
+  cowplot::save_plot(filename = sprintf("%s/%s/3_strat_arrange.pdf",
+                                        an_pdac, plt_dir),
+                     base_width = 30,
+                     base_height = 15)
+```
 

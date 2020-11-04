@@ -28,6 +28,11 @@ org <- "mm"
 source("misc/paths_vrs.R")
 seed_id <- 123
 set.seed(seed_id)
+
+library(RColorBrewer)
+n <- 60
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector  <-  unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
 ```
 
 ## Load data
@@ -64,6 +69,12 @@ UMAP_allen_70k <- ggplot(tsne_ds, aes(x = tsne_1,
   scale_color_manual(values = col_vector) +
   guides(colour = guide_legend(ncol = 1, override.aes = list(size = 7)))
 
+
+cowplot::save_plot(plot = UMAP_allen_70k,
+                   filename = sprintf("%s/%s/Supplementary_Figure_HHH_TSNE_allen_70k.svg",
+                                      an_mouse, plt_dir),
+                   base_width = 24,
+                   base_height = 18)
 
 ggpubr::ggexport(UMAP_allen_70k, 
                filename = sprintf("%s/%s/Supplementary_Figure_HHH_TSNE_allen_70k.pdf",

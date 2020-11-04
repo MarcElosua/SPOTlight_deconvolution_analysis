@@ -36,6 +36,7 @@ tissue <- "allen_ref_70k"
 dwn_smplng <- "both"
 org <- "mm"
 source("misc/paths_vrs.R")
+source("utils/bin.r")
 ```
 
 ## Set common parameters
@@ -65,15 +66,15 @@ col_low <- "green"; col_high <- "red"
 ## Load data
 ```{r}
 brain <- readRDS(sprintf("%s/%s/brain1_processed.RDS", an_mouse, robj_dir))
-decon_mtrx <- readRDS(file = sprintf("decon_mtrx_%s_%s2.RDS", id_comp, id_nmf))
+decon_mtrx <- readRDS(file = sprintf("decon_mtrx_%s_%s.RDS", id_comp, id_nmf))
 ```
 
 Join the data so its easier to work with
 ```{r}
 cell_types <- colnames(decon_mtrx)[which(colnames(decon_mtrx) != "res_ss")]
 
-decon_mtrx_prop <- round(decon_mtrx[, cell_types] / rowSums(decon_mtrx[, cell_types]), 4)
-decon_mtrx_prop[is.na(decon_mtrx_prop)] <- 0
+# decon_mtrx_prop <- round(decon_mtrx[, cell_types] / rowSums(decon_mtrx[, cell_types]), 4)
+# decon_mtrx_prop[is.na(decon_mtrx_prop)] <- 0
 brain@meta.data <- cbind(brain@meta.data, decon_mtrx_prop)
 cell_types_metadata <- colnames(brain@meta.data)[colnames(brain@meta.data) %in% cell_types]
 ```
@@ -456,15 +457,17 @@ hipp_plt <- cowplot::plot_grid(plotlist = list(plot_ls[[1]], NULL, plot_ls[[2]],
                    # align = "hv", 
                    rel_widths = c(1, 0.1, 1),
                    rel_heights = c(1, 0.1, 1),
-                   axis = "trbl")
+                   axis = "trbl") + 
+            theme(plot.margin = margin(1, 1, 1, 1, "cm"),
+                  plot.background = element_rect(fill = "White"),
+                  panel.background = element_blank())
 
-ggpubr::ggexport(plotlist = list(hipp_plt),
+cowplot::save_plot(plot = hipp_plt,
                      filename =
                    sprintf("%s/%s/Figure_ZZZ_hippocampus_arrange_%s_%s.pdf",
                            an_mouse, plt_dir, id_comp, id_nmf), 
-                     width = 15, 
-                     height = 18, 
-                     res = 600)
+                     base_width = 15, 
+                     base_height = 19)
 
 ggpubr::ggexport(plotlist = list(hipp_plt),
                      filename =
@@ -492,6 +495,10 @@ all_ct_plt <- joint_scatterpie_fun(se_obj = brain,
                      scatterpie_alpha = 1,
                      pie_scale = 0.2,
                      col_df = col_df)   
+
+saveRDS(object = all_ct_plt,
+        file = sprintf("%s/%s/Figure_YYY_spatial_scatterpie_allen_%s_%s.RDS",
+                                an_mouse, plt_dir, id_comp, id_nmf))
 
 ggpubr::ggexport(plotlist = list(all_ct_plt), 
                filename = sprintf("%s/%s/Figure_YYY_spatial_scatterpie_allen_%s_%s.pdf",
@@ -615,6 +622,11 @@ general_cortex_plt <- cowplot::plot_grid(plotlist = list(scatterpie_tmp,
   coord_fixed() +
   theme(plot.background = element_rect(fill = NA, colour = "black"))
 
+
+saveRDS(object = general_cortex_plt,
+        file = sprintf("%s/general_cortex_spatial_scatterpie_allen_%s_%s.pdf",
+                                    an_mouse, id_comp, id_nmf))
+
 ggpubr::ggexport(plotlist = list(general_cortex_plt), 
                    filename = sprintf("%s/general_cortex_spatial_scatterpie_allen_%s_%s.pdf",
                                     an_mouse, id_comp, id_nmf), 
@@ -641,22 +653,25 @@ cortex_arrange <- lapply(cortex_layers_mod, function(ct) {
                                 nrow = 1, 
                                 ncol = 2, 
                                 align = "hv", 
-                                labels = ct_df[ct_df$ct_names == ct, "plt_names"]) + 
-    theme(plot.margin = unit(c(1,1,1,1), "line"))
+                                labels = ct_df[ct_df$ct_names == ct, "plt_names"])
+
+  # leg_grobtable <- get_legend(ct_ls[[1]])
+  # plt_titleless <- cowplot::plot_grid(plotlist = list(plt_tmp, leg_grobtable), 
+  #                    ncol = 2, 
+  #                    nrow = 1, rel_widths = c(1, 0.2)) +
+  #   theme(plot.background = element_rect(fill = NA, colour ="black", size = 2))
   
-  leg_grobtable <- get_legend(ct_ls[[1]])
-  plt_titleless <- cowplot::plot_grid(plotlist = list(plt_tmp, leg_grobtable), 
-                     ncol = 2, 
-                     nrow = 1, rel_widths = c(1, 0.2)) +
-    theme(plot.background = element_rect(fill = NA, colour ="black", size = 2))
-  
-  return(round_corners_grob(plt_titleless))
+  return(plt_tmp)
 })
+
+saveRDS(object = cortex_arrange, 
+        file = sprintf("%s/%s/general_cortex_ct_location.RDS",
+                                    an_mouse, plt_dir, id_comp, id_nmf))
 
 ```
 
 ###### Arrangement
-```{r}
+```{r eval = FALSE}
 scatterpie_def <- round_corners_grob(scatterpie_tmp + theme(plot.background = element_rect(fill = NA, colour = "black", size = 2)))
 gen_cort_arr <- cowplot::plot_grid(plotlist = list(cortex_arrange[[1]], NULL, cortex_arrange[[2]], NULL, cortex_arrange[[3]],
                                    NULL, NULL, NULL, NULL, NULL,
