@@ -3,10 +3,12 @@ title: "SPOTlight deconvolution"
 author: "Marc Elosua-Bayes"
 date: "7/15/2020"
 output: html_document
+editor_options: 
+  chunk_output_type: inline
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
 
 ## Introduction
@@ -51,7 +53,8 @@ synthetic_mixtures <- readRDS(file = here::here(sprintf("%s/%s/common_synthetic_
 1st we need to find the marker genes for each cell type
 ```{r}
 se_quartz <- Seurat::SCTransform(object = se_quartz,
-                                 assay = "RNA")
+                                 assay = "RNA",
+                                 verbose = FALSE)
 
 Seurat::Idents(se_quartz) <- se_quartz$nnet2
 marker_genes <- Seurat::FindAllMarkers(object = se_quartz,
@@ -70,7 +73,7 @@ marker_genes_filt %>% dplyr::count(cluster)
 ```
 
 Run SPOTlight
-```{r}
+```{r eval = FALSE}
 spotlight_ls <- SPOTlight::spotlight_deconvolution(se_sc = se_quartz,
                                    counts_spatial = synthetic_mixtures[[1]],
                                    clust_vr = "nnet2",
@@ -88,7 +91,11 @@ saveRDS(object = spotlight_ls,
         file = here::here(sprintf("%s/%s/spotlight_deconv.RDS", an_tools, robj_dir)))
 ```
 
-```{r}
+
+```{r fig.height=8, fig.width=8}
+spotlight_ls <- readRDS(file = here::here(sprintf("%s/%s/spotlight_deconv.RDS",
+                                                  an_tools, robj_dir)))
+
 h <- NMF::coef(spotlight_ls[[1]][[1]])
 train_labs <- spotlight_ls[[1]][[2]]
 
@@ -111,3 +118,7 @@ SPOTlight::test_synthetic_performance(
   spot_composition_mtrx = synthetic_comp)
 ```
 
+## Session Info
+```{r}
+sessionInfo()
+```

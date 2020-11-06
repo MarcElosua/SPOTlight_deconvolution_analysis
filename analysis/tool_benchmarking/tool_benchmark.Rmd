@@ -4,7 +4,7 @@ author: "Marc Elosua-Bayes"
 date: "7/17/2020"
 output: html_document
 editor_options: 
-  chunk_output_type: inline
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
@@ -42,9 +42,9 @@ if (! file.exists(sprintf("analysis/%s/%s", an_tools, plt_dir))) {
 Color palette to use for each technology
 ```{r}
 techs <- c("SPOTlight", "MuSiC weighted", "MuSiC all genes", "SCDC", "NMFreg",
-           "DeconRNAseq", "RCTD", "CIBERSORT", "CIBERSORTx")
+           "DeconRNAseq", "RCTD", "CIBERSORT", "CIBERSORTx", "SPOTlight-CoGAPS") # "deepSCore"
 
-set1 <- RColorBrewer::brewer.pal(9, "Set1")
+set1 <- RColorBrewer::brewer.pal(length(techs), "Set3")
 
 col_df <- data.frame("Tool" = techs,
                      "color" = set1)
@@ -131,6 +131,19 @@ colnames(CIBERSORTx_deconv) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
                               x = colnames(CIBERSORTx_deconv),
                               perl = TRUE)
 
+# deepSCore
+# deepSCore_deconv <- readRDS(file = here::here(sprintf("%s/%s/deepSCore_deconv.RDS",
+#                                   an_tools, robj_dir)))
+# 
+# colnames(deepSCore_deconv) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
+#                               x = colnames(deepSCore_deconv),
+#                               perl = TRUE)
+
+# SPOTlight
+SPOTlight_CoGAPS_deconv <- readRDS(
+  file = here::here(sprintf("%s/%s/SPOTlight-CoGAPS_deconv.RDS",
+                                  an_tools, robj_dir)))
+
 ```
 
 Note on CIBERSORTx we need to run the signature matrix in the CIBERSORTx website since it doesn't work another way.
@@ -146,17 +159,20 @@ tech_ls <- list(
   "NMFreg" = nmfreg_mtrx,
   "DeconRNAseq" = deconrnaseq_mtrx,
   "RCTD" = rctd_deconv,
-  # "CIBERSORT" = NULL,
+  # "deepSCore" = deepSCore_deconv,
+  "SPOTlight-CoGAPS" = SPOTlight_CoGAPS_deconv,
   "CIBERSORTx" = CIBERSORTx_deconv)
 ```
 
 ```{r}
+source(here::here(glue::glue("{an_tools}/test_synthetic_performance_mod.R")))
+
 output_ls <- lapply(names(tech_ls), function(i) {
   print(i)
   mtrx <- tech_ls[[i]]
   
-  if(!is.null(mtrx)) {
-    tmp <- SPOTlight::test_synthetic_performance(
+  if (!is.null(mtrx)) {
+    tmp <- test_synthetic_performance(
       test_spots_metadata_mtrx = as.matrix(mtrx[, colnames(synthetic_comp)]),
       spot_composition_mtrx = synthetic_comp)
   } else { tmp <- NULL}
@@ -269,7 +285,7 @@ JSD_df <- lapply(names(tech_ls), function(i) {
   
     if(!is.null(tech_ls[[i]])) {
       tmp <- get_jsd(mtrx1 = synthetic_comp,
-                 mtrx2 = tech_ls[[i]][, colnames(synthetic_comp)])
+                 mtrx2 = as.matrix(tech_ls[[i]][, colnames(synthetic_comp)]))
       tmp[, 2] <- i
     
     } else {
