@@ -27,6 +27,7 @@ library(Spaniel)
 
 ## Parameters
 ```{r}
+set.seed(123)
 #### Setting vrs ####
 tech <- "sc"
 tissue <- "pdac"
@@ -61,45 +62,64 @@ sample_dict[["GSM4100728"]] = "PDAC-G ST1"
 
 ## Load data
 ```{r}
-# general_markers <- readRDS("data/immune_cancer_atlas/Atlas_general_markers_150.rds")
-specific_markers <- readRDS("data/immune_cancer_atlas/Atlas_specific_markers_150.rds")
+# ica_se <- readRDS("data/immune_cancer_atlas/pancreas_new_celltypes_100.rds")
+# ica_se <- ica_se[, !ica_se$specific_cell_type %in% c("Macro_2", "Macro_3")]
+ica_se <- readRDS(sprintf("%s/data/pancreas_seuobj_atlas.rds", an_pdac))
 
-ica_se <- readRDS("data/immune_cancer_atlas/pancreas_new_celltypes_100.rds")
-ica_se <- ica_se[, !ica_se$specific_cell_type %in% c("Macro_2", "Macro_3")]
+# Load updated annotation
+update_annot <- readr::read_csv(
+  "data/immune_cancer_atlas/TICAtlas_metadata.csv"
+  ) %>% dplyr::rename(barcode = X1)
+
+```
+
+Update annotations
+```{r}
+metadata <- ica_se@meta.data %>%
+  tibble::rownames_to_column("barcode") %>%
+  dplyr::left_join(update_annot,
+                   by = c("barcode")) %>% 
+  dplyr::mutate(specific_cell_type = cell_type.y) %>%
+  tibble::column_to_rownames("barcode")
+
+ica_se@meta.data <- metadata
+
+table(metadata$cell_type.y)
+```
+
+Compute markers for each cell type
+```{r}
+specific_markers <- Seurat::FindAllMarkers(
+  object = ica_se,
+  assay = "RNA",
+  slot = "data",
+  only.pos = TRUE)
+
+saveRDS(object = specific_markers,
+        file = "data/immune_cancer_atlas/PDAC_specific_markers.rds")
+```
+
+Load markers
+```{r}
+# general_markers <- readRDS("data/immune_cancer_atlas/Atlas_general_markers_150.rds")
+specific_markers <- readRDS("data/immune_cancer_atlas/PDAC_specific_markers.rds")
 ```
 
 Make dataframes from the list to initiliaze the matrix
 ```{r}
-# general_markers_df <- lapply(names(general_markers), function(ct) {
+# specific_markers_df <- lapply(names(specific_markers), function(ct) {
 #   tmp_df <- data.frame(cluster = ct,
-#                        gene = general_markers[[ct]],
+#                        gene = specific_markers[[ct]],
 #                        p_val = 0)
 #   return(tmp_df)
 # }) %>% dplyr::bind_rows()
 # 
-# general_markers_df$cluster <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
-#                                      x = general_markers_df$cluster, 
+# specific_markers_df$cluster <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
+#                                      x = specific_markers_df$cluster,
 #                                      perl = TRUE)
-
-specific_markers_df <- lapply(names(specific_markers), function(ct) {
-  tmp_df <- data.frame(cluster = ct,
-                       gene = specific_markers[[ct]],
-                       p_val = 0)
-  return(tmp_df)
-}) %>% dplyr::bind_rows()
-
-specific_markers_df$cluster <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
-                                     x = specific_markers_df$cluster, 
-                                     perl = TRUE)
-
 ```
 
 ```{r}
-# gen_ct <- ica_se$general_cell_type
-# ica_se$general_cell_type <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
-#                                      x = ica_se$general_cell_type, 
-#                                      perl = TRUE)
-
 sp_ct <- ica_se$specific_cell_type
 ica_se$specific_cell_type <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
                                      x = ica_se$specific_cell_type, 
@@ -141,13 +161,14 @@ st_list <- sapply(sample_geo, USE.NAMES = TRUE, function(geo) {
 
 ## Specific cell type deconvolution
 ```{r}
+# c("GSM3036911", "GSM4100723")
 specific_decon_mtrx_ls <- lapply(sample_geo, function(geo) {
   st_se <- st_list[[geo]]
   
   decon_mtrx <- SPOTlight::spotlight_deconvolution(se_sc = ica_se,
                                      counts_spatial = st_se@assays$RNA@counts,
                                      clust_vr = "specific_cell_type",
-                                     cluster_markers = specific_markers_df,
+                                     cluster_markers = specific_markers,
                                      cl_n = cl_n,
                                      hvg = hvg,
                                      ntop = NULL,

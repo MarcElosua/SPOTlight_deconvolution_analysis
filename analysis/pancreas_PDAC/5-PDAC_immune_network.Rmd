@@ -76,8 +76,11 @@ dir.create(path = sprintf("%s/%s", an_pdac, robj_dir), showWarnings = FALSE, rec
 ## Load data
 ### scRNAseq data
 ```{r}
-ica_se <- readRDS("data/immune_cancer_atlas/pancreas_new_celltypes_100.rds")
-ica_se <- ica_se[, !ica_se$specific_cell_type %in% c("Macro_2", "Macro_3")]
+# ica_se <- readRDS("data/immune_cancer_atlas/pancreas_new_celltypes_100.rds")
+# ica_se <- ica_se[, !ica_se$specific_cell_type %in% c("Macro_2", "Macro_3")]
+update_annot <- readr::read_csv(
+  "data/immune_cancer_atlas/TICAtlas_metadata.csv"
+  ) %>% dplyr::rename(barcode = X1)
 ```
 
 ### Deconvolution matrices
@@ -104,7 +107,7 @@ names(immune_decon_mtrx_ls) <- names_ls
 ### Color dataframe
 Cell type specific color
 ```{r}
-cell_types_plt <- sort(unique(ica_se$specific_cell_type))
+cell_types_plt <- sort(unique(update_annot$cell_type))
 
 pdac_plt_names <- data.frame(df_name = gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
                                             x = cell_types_plt,
@@ -117,7 +120,7 @@ pdac_plt_names <- data.frame(df_name = gsub(pattern = "[[:punct:]]|[[:blank:]]",
 ### GSM3036911 specific network
 ```{r}
 lapply(c("GSM3036911", "GSM4100723"), function(geo) {
-  decon_mtrx <- immune_decon_mtrx_ls[[geo]]
+  decon_mtrx <- immune_decon_mtrx_ls[[geo]][[2]]
   decon_mtrx <- decon_mtrx[, colnames(decon_mtrx)[!colnames(decon_mtrx) %in% "res_ss"]]
   
   # Change to right column names
@@ -153,29 +156,29 @@ lapply(c("GSM3036911", "GSM4100723"), function(geo) {
     dplyr::left_join(graph_col_df, by = "value") %>%
     dplyr::pull(color)
   
-  jpeg(sprintf("%s/%s/Suppl_Fig_MMM_interaction_graph_immune_arrange_%s.jpeg", 
-               an_pdac, plt_dir, geo), 
-      width = 750,
-      height = 750, 
-      # res = 600,
-      # pointsize = 0.2,
-      quality = 100)
-  
-  # Open a pdf file
-  plot(graph_ntw,
-       # Size of the edge
-       edge.width = edge_importance,
-       edge.color = color_edge,
-       # Size of the buble
-       vertex.size = deg/2,
-       vertex.color = "#cde394",
-       vertex.frame.color = "white",
-       vertex.label.color = "black",
-       vertex.label.family = "Ubuntu", # Font family of the label (e.g.“Times”, “Helvetica”)
-       layout = layout.circle,
-       main = sprintf("%s spatial interaction network",geo ))
-  
-  dev.off()
+  # jpeg(sprintf("%s/%s/Suppl_Fig_MMM_interaction_graph_immune_arrange_%s.jpeg", 
+  #              an_pdac, plt_dir, geo), 
+  #     width = 750,
+  #     height = 750, 
+  #     # res = 600,
+  #     # pointsize = 0.2,
+  #     quality = 100)
+  # 
+  # # Open a pdf file
+  # plot(graph_ntw,
+  #      # Size of the edge
+  #      edge.width = edge_importance,
+  #      edge.color = color_edge,
+  #      # Size of the buble
+  #      vertex.size = deg/2,
+  #      vertex.color = "#cde394",
+  #      vertex.frame.color = "white",
+  #      vertex.label.color = "black",
+  #      vertex.label.family = "Ubuntu", # Font family of the label (e.g.“Times”, “Helvetica”)
+  #      layout = layout.circle,
+  #      main = sprintf("%s spatial interaction network",geo ))
+  # 
+  # dev.off()
   
   pdf(sprintf("%s/%s/Suppl_Fig_MMM_interaction_graph_immune_arrange_%s.pdf", 
                an_pdac, plt_dir, geo), 

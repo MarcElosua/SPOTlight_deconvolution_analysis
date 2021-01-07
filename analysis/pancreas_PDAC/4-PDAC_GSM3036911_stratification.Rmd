@@ -77,8 +77,12 @@ dir.create(path = sprintf("%s/%s", an_pdac, robj_dir), showWarnings = FALSE, rec
 ## Load data
 ### scRNAseq data
 ```{r}
-ica_se <- readRDS("data/immune_cancer_atlas/pancreas_new_celltypes_100.rds")
-ica_se <- ica_se[, !ica_se$specific_cell_type %in% c("Macro_2", "Macro_3")]
+# ica_se <- readRDS("data/immune_cancer_atlas/pancreas_new_celltypes_100.rds")
+# ica_se <- ica_se[, !ica_se$specific_cell_type %in% c("Macro_2", "Macro_3")]
+
+update_annot <- readr::read_csv(
+  "data/immune_cancer_atlas/TICAtlas_metadata.csv"
+  ) %>% dplyr::rename(barcode = X1)
 ```
 
 ### Spatial data
@@ -152,7 +156,7 @@ names(immune_decon_mtrx_ls) <- names_ls
 ### Color dataframe
 Cell type specific color
 ```{r}
-cell_types_plt <- sort(unique(ica_se$specific_cell_type))
+cell_types_plt <- sort(unique(update_annot$cell_type))
 
 pdac_plt_names <- data.frame(df_name = gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
                                             x = cell_types_plt,
@@ -172,14 +176,6 @@ strat_plt_col <- data.frame(strat = c("Intermediate", "Non-Tumoral", "Removed ma
 ### Visualization
 ```{r}
 st_se <- st_list[[1]]
-
-Spaniel::spanielPlot(object = st_se,
-                     grob = st_se@images[[1]], 
-                     plotType = "Cluster", 
-                     clusterRes = "SCT_snn_res.0.8") +
-  theme_void() +
-  coord_fixed(1) +
-  scale_alpha(range = c(1, 1))
 ```
 
 ### Classify by cancer-cell proportion
@@ -262,7 +258,7 @@ data_df$y_inv <- 36 - data_df$y
 
 # data_df[, point_size] <- if_else(data_df[, point_size] == 0, NA_real_, data_df[, point_size])
 
-tmp_plt_2 <- ggplot2::ggplot(data_df,
+tmp_plt_2 <- ggplot(data_df,
                 ggplot2::aes_string("x", "y_inv",
                                     color = "status_2_territories" 
                                     # alpha = point_alpha
@@ -327,7 +323,7 @@ Get capture location identifiers to assign tumoral/non-tumoral
 #### Joining immune cell type information
 Transfer assignment to Immune cell mapping
 ```{r}
-decon_mtrx_immune <- immune_decon_mtrx_ls[[1]]
+decon_mtrx_immune <- immune_decon_mtrx_ls[[1]][[2]]
 
 decon_mtrx_immune[decon_mtrx_immune > 0] <- 1
 
@@ -350,7 +346,6 @@ tmp_df <- decon_df_immune %>%
 
 prop_df <- tmp_df[, 1:(ncol(tmp_df) - 1)] / tmp_df[, ncol(tmp_df)]
 tmp_dif <- sapply(colnames(prop_df), function(i) prop_df[1, i] - prop_df[2, i])
-
 ```
 
 Get difference function
@@ -411,7 +406,7 @@ hm_df_2 <- dplyr::bind_rows(prop_df, perm_df)
 rownames(hm_df_2) <- c(rownames(prop_df), "pval")
 ```
 
-
+Plot heatmap
 ```{r}
 hm_tmp <- t(hm_df_2) %>%
   data.frame() %>% 
@@ -423,86 +418,79 @@ hm_tmp <- t(hm_df_2) %>%
     status = factor(status, levels = c("Non.Tumoral", "Tumoral", "pval"), labels = c("Non Tumoral", "Tumoral", "Adj. Pval"))
     ) %>%
   dplyr::left_join(pdac_plt_names, by = c("cell_type" = "df_name")) %>%
-  dplyr::mutate(proportion_mod = if_else(status == "Adj. Pval", 0, proportion),
+  dplyr::mutate(proportion_mod = dplyr::if_else(status == "Adj. Pval", 0, proportion),
                 plt_name = as.character(plt_name),
-                plt_name = if_else(plt_name == "Macro_1", "Macrophage", plt_name),
-                plt_name = if_else(plt_name == "Mono", "Monocyte", plt_name),
-                pval = if_else(status == "Adj. Pval", proportion, NA_real_)) %>% 
-  ggplot(aes(x = status, 
+                plt_name = dplyr::if_else(plt_name == "Macro_1", "Macrophage", plt_name),
+                plt_name = dplyr::if_else(plt_name == "Mono", "Monocyte", plt_name),
+                plt_name = stringr::str_wrap(string = plt_name, width = 20),
+                pval = dplyr::if_else(status == "Adj. Pval", proportion, NA_real_)) %>% 
+  ggplot(ggplot2::aes(x = status,
              y = plt_name, 
              fill= proportion_mod)) + 
-  geom_tile(aes(alpha = proportion_mod)) +
-  geom_text(aes(label = round(pval, 2)),
-            show_guide  = FALSE) +
-  theme_classic() +
-  labs(title = "Cell type enrichment per region",
+  ggplot2::geom_tile(ggplot2::aes(alpha = proportion_mod)) +
+  ggplot2::geom_text(ggplot2::aes(label = round(pval, 2)),
+            show_guide  = FALSE,
+            size = 7,
+            family = "Arial") +
+  ggplot2::theme_classic() +
+  ggplot2::labs(title = "Cell type enrichment per region",
        y = "",
        x = "",
        fill = "Proportion",
        alpha = "Proportion") +
-  scale_fill_gradient(low = "#FFF5F0",
+  ggplot2::scale_fill_gradient(low = "#FFF5F0",
                       high = "#99000D",
                       guide = "legend",
                       limits = c(0, 1),
                       breaks = seq(0, 1, 0.1)) +
-  scale_alpha_continuous(guide = "legend",
+  ggplot2::scale_alpha_continuous(guide = "legend",
                          limits = c(0, 1), 
                          breaks = seq(0, 1, 0.1)) +
-  theme(axis.text.x = element_text(size = 12),
-        axis.text.y = element_text(size = 15),
-        legend.text = element_text(size = 12),
-        legend.title = element_text(size = 17),
-        plot.title = element_text(hjust = 0.5, face = "bold", size = 20),
-        axis.title = element_text(size = 15),
-        axis.line = element_blank())
+  ggplot2::theme(
+        axis.text.x = ggplot2::element_text(size = 20),
+        axis.text.y = ggplot2::element_text(size = 20),
+        legend.text = ggplot2::element_text(size = 20),
+        legend.title = ggplot2::element_text(size = 22),
+        plot.title = ggplot2::element_text(hjust = 0.5, face = "bold", size = 20),
+        axis.title = ggplot2::element_text(size = 22),
+        axis.line = ggplot2::element_blank())
+hm_tmp
+# saveRDS(object = hm_tmp,
+#         file = sprintf("%s/%s/heatmap_pvalue_GSM3036911_status_2_territories.RDS",
+#                                     an_pdac, plt_dir))
 
-saveRDS(object = hm_tmp,
-        file = sprintf("%s/%s/heatmap_pvalue_GSM3036911_status_2_territories.RDS",
-                                    an_pdac, plt_dir))
+# saveRDS(object = tmp_plt_2,
+#         file = sprintf("%s/%s/GSM3036911_status_2_territories.RDS",
+#                                     an_pdac, plt_dir))
 
-saveRDS(object = tmp_plt_2,
-        file = sprintf("%s/%s/GSM3036911_status_2_territories.RDS",
-                                    an_pdac, plt_dir))
+# cowplot::save_plot(plotlist = list(hm_tmp, tmp_plt_2),
+#                  filename = sprintf("%s/%s/heatmap_pvalue_GSM3036911_status_2_territories.pdf",
+#                                     an_pdac, plt_dir),
+#                  ncol = 2,
+#                  width = 16, 
+#                  height = 9, 
+#                  res = 600)
 
-ggpubr::ggexport(plotlist = list(hm_tmp, tmp_plt_2),
-                 filename = sprintf("%s/%s/heatmap_pvalue_GSM3036911_status_2_territories.pdf",
-                                    an_pdac, plt_dir),
-                 ncol = 2,
-                 width = 16, 
-                 height = 9, 
-                 res = 600)
+# ggpubr::ggexport(plotlist = list(hm_tmp, tmp_plt_2),
+#                  filename = sprintf("%s/%s/heatmap_pvalue_GSM3036911_status_2_territories_arr.jpg",
+#                                     an_pdac, plt_dir),
+#                  ncol = 2,
+#                  width = 6000, 
+#                  height = 4000, 
+#                  res = 400)
 
-ggpubr::ggexport(plotlist = list(hm_tmp, tmp_plt_2),
-                 filename = sprintf("%s/%s/heatmap_pvalue_GSM3036911_status_2_territories_arr.jpg",
-                                    an_pdac, plt_dir),
-                 ncol = 2,
-                 width = 6000, 
-                 height = 4000, 
-                 res = 400)
-
-ggpubr::ggexport(plotlist = list(hm_tmp),
-                 filename = sprintf("%s/%s/heatmap_pvalue_GSM3036911_status_2_territories.jpg",
-                                    an_pdac, plt_dir),
-                 ncol = 2,
-                 width = 3000, 
-                 height = 4000, 
-                 res = 400)
-
-ggpubr::ggexport(plotlist = list(tmp_plt_2),
-                 filename = sprintf("%s/%s/GSM3036911_status_2_territories.jpg",
-                                    an_pdac, plt_dir),
-                 ncol = 2,
-                 width = 4000, 
-                 height = 4000, 
-                 res = 400)
-
-
+cowplot::save_plot(plot = hm_tmp,
+                 filename = here::here(sprintf("%s/%s/heatmap_pvalue_GSM3036911_status_2_territories.pdf",
+                                    an_pdac, plt_dir)),
+                 # ncol = 2,
+                 base_width = 10, 
+                 base_height = 15)
 ```
 
 #### Box plots
 Preparing the dataset
 ```{r}
-decon_mtrx_immune <- immune_decon_mtrx_ls[[1]]
+decon_mtrx_immune <- immune_decon_mtrx_ls[[1]][[2]]
 
 decon_df_immune <- data.frame(decon_mtrx_immune)
 
@@ -547,26 +535,35 @@ anno_df <- ggpubr::compare_means(proportion ~ status_2_territories,
 
 Plot faceted boxplots, subseting cell types of interest
 ```{r}
+ct_interest <- c("M2 TAMs", "Proliferative T cells", "Recently activated CD4 T cells",
+                 "Plasma B cells", "Pre-exhausted CD8 T cells", "Proinflamatory TAMs",
+                 "Cytotoxic CD8 T cells")
 bplt <- decon_mtrx_long %>%
-  filter(cell_type != "MAST") %>% 
-  left_join(anno_df, by = "plt_name") %>% 
+  left_join(anno_df, by = "plt_name") %>%
+  filter(plt_name %in% ct_interest) %>%
   filter(p.adj < 0.05) %>% 
-  ggpubr::ggboxplot(., x = "status_2_territories", y = "proportion", 
-                  color = "status_2_territories", fill = "status_2_territories",
-                  add = "jitter", alpha = 0.6,
-                  facet.by = "plt_name",
-                  scales = "free",
-                  # palette = "npg",
-                  palette = c("#00A087FF", "#E64B35FF"),
-                  nrow = 2,
-                  outlier.shape = NA) +
+  ggpubr::ggboxplot(.,
+                    x = "status_2_territories",
+                    y = "proportion", 
+                    color = "status_2_territories",
+                    fill = "status_2_territories",
+                    add = "jitter",
+                    alpha = 0.6,
+                    facet.by = "plt_name",
+                    scales = "free",
+                    # palette = "npg",
+                    palette = c("#00A087FF", "#E64B35FF"),
+                    nrow = 2,
+                    outlier.shape = NA) +
   # ggplot2::facet_wrap(~plt_name) + 
   ggpubr::geom_signif(
-    data = anno_df %>% filter(p.adj < 0.05 & plt_name != "MAST"), 
+    data = anno_df %>% filter(p.adj < 0.05 & plt_name %in% ct_interest), 
     aes(xmin = group1, 
         xmax = group2, 
         annotations = p.adj.txt, 
-        y_position = y_pos * 1),
+        y_position = y_pos * 1,
+        size = 20,
+        family = "Arial"),
     manual = TRUE)
 
 bplt <- bplt +
@@ -576,35 +573,28 @@ bplt <- bplt +
                 fill = "Stratification",
                 color = "Stratification") +
   ggplot2::theme(
-    strip.text = element_text(size = 12, face = "bold"),
-    axis.text =  element_text(size = 12),
-    axis.title = element_text(size = 15, face = "bold"),
-    legend.position = "right",
-    plot.title = element_text(face = "bold", hjust = 0.5, size = 20),
-    legend.text = element_text(size = 12),
-    legend.title = element_text(size = 15),
-    legend.key.size = unit(3,"line"),
-    # strip.text = element_text(face="bold", size=9),
-    strip.background = element_rect(size = 0.3))
+    text = ggplot2::element_text(family = "Arial"),
+    strip.text = ggplot2::element_text(size = 23, face = "bold"),
+    axis.text =  ggplot2::element_text(size = 20),
+    axis.title = ggplot2::element_text(size = 25, face = "bold"),
+    strip.background.x = ggplot2::element_rect(colour = "transparent",
+                                             fill = "transparent"),
+    legend.position = "none",
+    plot.title = ggplot2::element_text(face = "bold", hjust = 0.5, size = 30),
+    legend.text = ggplot2::element_text(size = 12),
+    legend.title = ggplot2::element_text(size = 15),
+    legend.key.size = ggplot2::unit(3, "line"))
 
-saveRDS(object = bplt,
-        file = sprintf("%s/%s/boxplot_GSM3036911_status_2_territories_filt.RDS",
-                       an_pdac, plt_dir))
+# saveRDS(object = bplt,
+#         file = sprintf("%s/%s/boxplot_GSM3036911_status_2_territories_filt.RDS",
+#                        an_pdac, plt_dir))
 
-
-ggpubr::ggexport(plotlist = list(bplt),
-                 filename = ,
-                 width = 16,
-                 height = 12,
-                 res = 600)
-
-ggpubr::ggexport(plotlist = list(bplt),
-                 filename = sprintf("%s/%s/boxplot_GSM3036911_status_2_territories_filt.jpg",an_pdac, plt_dir),
-                 width = 6000,
-                 height = 4000,
-                 res = 400)
-
-
+cowplot::save_plot(
+  plot = bplt,
+  filename = sprintf("%s/%s/boxplot_GSM3036911_status_2_territories_filt.pdf",
+                     an_pdac, plt_dir),
+  base_width = 16,
+  base_height = 14)
 ```
 
 Plot faceted boxplots All cell types
@@ -650,20 +640,12 @@ ggpubr::ggexport(plotlist = list(bplt),
                  width = 16,
                  height = 12,
                  res = 600)
-
-ggpubr::ggexport(plotlist = list(bplt),
-                 filename = sprintf("%s/%s/boxplot_GSM3036911_status_2_territories.jpg",an_pdac, plt_dir),
-                 width = 6000,
-                 height = 4000,
-                 res = 400)
-
-
 ```
 
 #### Analyzing status_3_territories
 Transfer assignment to Immune cell mapping
 ```{r}
-decon_mtrx_immune <- immune_decon_mtrx_ls[[1]]
+decon_mtrx_immune <- immune_decon_mtrx_ls[[1]][[2]]
 
 decon_mtrx_immune[decon_mtrx_immune > 0] <- 1
 
@@ -711,14 +693,16 @@ saveRDS(object = strat_3_plt,
         file = sprintf("%s/%s/GSM3036911_status_3_territories.RDS",
                                     an_pdac, plt_dir))
 
-ggpubr::ggexport(plotlist = list(strat_3_plt +
-                                   guides(color = guide_legend(override.aes = list(size = 10))) +
-                                   guides(fill = guide_legend(override.aes = list(size = 10))) +
-                                   theme(legend.title = element_text(size = 15, face = "bold"),
-                                         legend.text = element_text(size = 12))),
-                 filename = sprintf("%s/%s/GSM3036911_status_3_territories.jpeg", 
-                                      an_pdac, plt_dir),
-                 width = 5000, height = 4000, res = 400)
+cowplot::save_plot(
+  plot = strat_3_plt +
+    guides(color = guide_legend(override.aes = list(size = 10))) +
+                   guides(fill = guide_legend(override.aes = list(size = 10))) +
+                   theme(legend.title = element_text(size = 15, face = "bold"),
+                         legend.text = element_text(size = 12)),
+  filename = sprintf("%s/%s/GSM3036911_status_3_territories.pdf", 
+                      an_pdac, plt_dir),
+  base_width = 10,
+  base_height = 8)
 ```
 
 Proportion heatmap
@@ -795,7 +779,7 @@ ggpubr::ggarrange(plotlist = list(hm_tmp, strat_3_plt),
 #### Box plots
 Preparing the dataset
 ```{r}
-decon_mtrx_immune <- immune_decon_mtrx_ls[[1]]
+decon_mtrx_immune <- immune_decon_mtrx_ls[[1]][[2]]
 
 decon_df_immune <- data.frame(decon_mtrx_immune)
 
@@ -809,8 +793,7 @@ decon_mtrx_long <- decon_df_immune %>%
                       names_to = "cell_type", 
                       values_to = "proportion") %>% 
   dplyr::left_join(pdac_plt_names, by = c("cell_type" = "df_name")) %>% 
-  dplyr::mutate(plt_name = as.character(plt_name)) %>% 
-  dplyr::filter(cell_type %in% c("B.cell", "CD4.CM", "CD4.naive.like", "CD8.effector.exhausted", "CD8.proliferative", "Plasma.B"))
+  dplyr::mutate(plt_name = as.character(plt_name))
 ```
 
 Perform ANOVA and pairwise t-test and adjust P-values
@@ -890,19 +873,57 @@ bplt <- p +
 
 
 saveRDS(object = bplt,
-        file = sprintf("%s/%s/boxplot_GSM3036911_status_3_territories.RDS",an_pdac, plt_dir))
+        file = sprintf("%s/%s/boxplot_GSM3036911_status_3_territories.RDS",
+                       an_pdac, plt_dir))
 
-ggpubr::ggexport(plotlist = list(bplt),
-                 filename = sprintf("%s/%s/boxplot_GSM3036911_status_3_territories.pdf",an_pdac, plt_dir),
-                 width = 32,
-                 height = 24,
-                 res = 600)
+cowplot::save_plot(
+  plot = bplt,
+  filename = sprintf("%s/%s/boxplot_GSM3036911_status_3_territories.pdf",
+                     an_pdac, plt_dir),
+  base_width = 32,
+  base_height = 24)
+```
 
-ggpubr::ggexport(plotlist = list(bplt),
-                 filename = sprintf("%s/%s/boxplot_GSM3036911_status_3_territories.jpeg",an_pdac, plt_dir),
-                 width = 6000,
-                 height = 4000,
-                 res = 400)
+Boxplot of cells of interest
+```{r}
+ct_interest <- c("M2 TAMs", "Proliferative T cells",
+                 "Recently activated CD4 T cells", "Plasma B cells",
+                 "Pre-exhausted CD8 T cells", "Proinflamatory TAMs")
+
+p <- decon_mtrx_long %>%
+  dplyr::filter(plt_name %in% ct_interest) %>% 
+  ggpubr::ggboxplot(.,
+                       x = "status_3_territories",
+                       y = "proportion",
+                       color = "status_3_territories",
+                       fill = "status_3_territories",
+                       add = "jitter",
+                       alpha = 0.6,
+                       facet.by = "plt_name",
+                       scales = "free",
+                       repel = TRUE,
+                       palette = c("#00A087FF", "#4DBBD5FF", "#E64B35FF"),
+                       outlier.shape = NA)
+
+anno_df_wilcox_sub <- anno_df_wilcox %>% filter(plt_name %in% ct_interest)
+
+bplt_int <- p + 
+  ggpubr::stat_pvalue_manual(anno_df_wilcox_sub, label = "p = {p.adj}", size = 6) +
+  ggplot2::labs(
+    # title = "PDAC-A Immune capture location composition comparison 3 section stratification",
+                x = "Tissue stratification",
+                y = "Capture location proportion",
+                fill = "Stratification",
+                color = "Stratification") +
+  ggplot2::theme(
+    strip.text = element_text(size = 12, face = "bold"),
+    axis.text =  element_text(size = 12),
+    axis.title = element_text(size = 14, face = "bold"),
+    legend.position = "right",
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 25),
+    legend.text = element_text(size = 17),
+    legend.title = element_text(size = 20),
+    legend.key.size = unit(3,"line"))
 
 ```
 
@@ -910,14 +931,14 @@ ggpubr::ggexport(plotlist = list(bplt),
 ##### Arrange 3 territory stratification
 ```{r}
 cowplot::plot_grid(strat_3_plt + theme(plot.title = element_text(size = 20)),
-                   bplt,
+                   bplt_int,
                    align = "h",
                    nrow = 1,
                    ncol = 2,
-                   rel_widths = c(1.25, 1)) %>% 
+                   rel_widths = c(1, 1.5)) %>% 
   cowplot::save_plot(filename = sprintf("%s/%s/3_strat_arrange.pdf",
                                         an_pdac, plt_dir),
-                     base_width = 30,
-                     base_height = 15)
+                     base_width = 25,
+                     base_height = 10)
 ```
 

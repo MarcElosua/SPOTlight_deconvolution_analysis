@@ -19,6 +19,7 @@ In this Rmarkdown document we will compare the performance of the different tool
 library(dplyr)
 library(ggplot2)
 library(RColorBrewer)
+library(RCTD)
 ```
 
 ## Parameters
@@ -108,8 +109,9 @@ colnames(deconrnaseq_mtrx) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
 myRCTD <- readRDS(
   file = here::here(sprintf("%s/%s/rctd_deconv.RDS",
                             an_tools, robj_dir)))
-rctd_deconv <- myRCTD@results$weights
-
+results <- myRCTD@results
+# normalize the cell type proportions to sum to 1.
+rctd_deconv <- sweep(results$weights, 1, rowSums(results$weights), '/') 
 colnames(rctd_deconv) <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
                               x = colnames(rctd_deconv),
                               perl = TRUE)
@@ -145,7 +147,6 @@ SPOTlight_CoGAPS_deconv <- readRDS(
                                   an_tools, robj_dir)))
 
 ```
-
 Note on CIBERSORTx we need to run the signature matrix in the CIBERSORTx website since it doesn't work another way.
 
 ## Visualization comparison
@@ -310,7 +311,7 @@ JSD_benchmark <- JSD_df %>%
              y = JSD,
              fill = Tool,
              color = Tool)) +
-  geom_jitter(alpha = 0.5) +
+  # geom_jitter(alpha = 0.5) +
   geom_violin(alpha = 0.8) +
   theme_classic() +
   scale_fill_brewer(palette = "Set1") +
@@ -346,5 +347,8 @@ JSD_df %>%
   dplyr::mutate(
     JSD_quantile = sprintf("%s [%s-%s]",
                            Median, Q25, Q75)
-  )
+  ) %>%
+  flextable::flextable() %>%
+  flextable::autofit() %>%
+  flextable::theme_zebra()
 ```

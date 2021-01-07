@@ -323,8 +323,7 @@ topic_plt_arr <- lapply(seq_len(10), function(i) {
   rownames(h) <- paste("Topic", 1:nrow(h), sep = " ")
   
   topic_profile_plts <- dot_plot_profiles_fun(h = h,
-                      train_cell_clust = nmf_mod_ls[[2]],
-                      clust_vr = clust_vr)
+                      train_cell_clust = nmf_mod_ls[[2]])
   
   tmp_plt <- topic_profile_plts[[2]] +
     scale_size(limits = c(0, 1)) +
@@ -338,17 +337,26 @@ topic_plt_arr <- lapply(seq_len(10), function(i) {
 }) %>% ggpubr::ggarrange(plotlist = ., ncol = 3, nrow = 4)
 
 
-cowplot::save_plot(filename = sprintf("%s/%s/Supplementary_Figure_FFF_topic_signatures_arrange_10_%s_%s_.pdf", 
+cowplot::save_plot(
+  filename = sprintf("%s/%s/Supplementary_Figure_FFF_topic_signatures_arrange_10_%s_%s_.pdf", 
                      an_mouse, plt_dir, id_comp, id_nmf_iter),
-                  plot = topic_plt_arr,
-                 base_width = 24,
-                 base_height = 30)
+  plot = topic_plt_arr,
+  base_width = 24,
+  base_height = 30)
 
-cowplot::save_plot(filename = sprintf("%s/%s/Supplementary_Figure_FFF_topic_signatures_arrange_10_%s_%s_.svg", 
+cowplot::save_plot(
+  filename = sprintf("%s/%s/Supplementary_Figure_FFF_topic_signatures_arrange_10_%s_%s_.svg",
                      an_mouse, plt_dir, id_comp, id_nmf_iter),
-                  plot = topic_plt_arr,
-                 base_width = 24,
-                 base_height = 30)
+  plot = topic_plt_arr,
+   base_width = 24,
+   base_height = 30)
+
+
+cowplot::save_plot(
+  filename = "~/Desktop/SPOTlight_plots/topic_profiles.png",
+  plot = topic_plt_arr,
+  base_width = 36,
+  base_height = 30)
 
 ```
 

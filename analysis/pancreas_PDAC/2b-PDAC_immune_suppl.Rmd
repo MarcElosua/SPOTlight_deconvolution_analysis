@@ -78,10 +78,35 @@ sample_pdac <- c(pdac_a_smpl, pdac_b_smpl)
 ## Load data
 ```{r}
 # general_markers <- readRDS("data/immune_cancer_atlas/Atlas_general_markers_150.rds")
-specific_markers <- readRDS("data/immune_cancer_atlas/Atlas_specific_markers_150.rds")
+specific_markers <- readRDS("data/immune_cancer_atlas/PDAC_specific_markers.rds")
 ica_se <- readRDS("data/immune_cancer_atlas/pancreas_new_celltypes_100.rds")
 ica_se <- ica_se[, !ica_se$specific_cell_type %in% c("Macro_2", "Macro_3")]
+```
 
+Update metadata and annotation
+```{r}
+update_annot <- readr::read_csv(
+  "data/immune_cancer_atlas/TICAtlas_metadata.csv"
+  ) %>% dplyr::rename(barcode = X1)
+
+# Add the new annotation to Seurat object
+metadata <- ica_se@meta.data %>%
+  tibble::rownames_to_column("barcode") %>%
+  dplyr::left_join(update_annot,
+                   by = c("barcode", "nCount_RNA", "nFeature_RNA", "percent.mt",
+                          "gender", "patient", "subtype", "source")) %>% 
+  dplyr::mutate(specific_cell_type = cell_type.y) %>%
+  tibble::column_to_rownames("barcode")
+
+ica_se@meta.data <- metadata
+```
+
+plot names dataframe
+```{r}
+plt_df <- data.frame(plt_name = unique(update_annot$cell_type),
+                     ct_name = gsub(pattern = "[[:punct:]]|[[:blank:]]", ".",
+                                     x = unique(update_annot$cell_type),
+                                     perl = TRUE))
 ```
 
 Make dataframes from the list to initiliaze the matrix
@@ -97,16 +122,16 @@ Make dataframes from the list to initiliaze the matrix
 #                                      x = general_markers_df$cluster, 
 #                                      perl = TRUE)
 
-specific_markers_df <- lapply(names(specific_markers), function(ct) {
-  tmp_df <- data.frame(cluster = ct,
-                       gene = specific_markers[[ct]],
-                       p_val = 0)
-  return(tmp_df)
-}) %>% dplyr::bind_rows()
-
-specific_markers_df$cluster <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
-                                     x = specific_markers_df$cluster, 
-                                     perl = TRUE)
+# specific_markers_df <- lapply(names(specific_markers), function(ct) {
+#   tmp_df <- data.frame(cluster = ct,
+#                        gene = specific_markers[[ct]],
+#                        p_val = 0)
+#   return(tmp_df)
+# }) %>% dplyr::bind_rows()
+# 
+# specific_markers_df$cluster <- gsub(pattern = "[[:punct:]]|[[:blank:]]", ".", 
+#                                      x = specific_markers_df$cluster, 
+#                                      perl = TRUE)
 
 ```
 
@@ -149,8 +174,6 @@ decon_mtrx_dir <- sprintf("%s/%s", an_pdac, robj_dir)
 decon_fn_ls <- list.files(path = decon_mtrx_dir,
                        pattern = "^decon_mtrx_ica-integration_specific")[1:6]
 
-
-
 immune_decon_mtrx_ls <- lapply(decon_fn_ls, function(fn) {
   path_str <- paste(decon_mtrx_dir, fn, sep = "/")
   decon_mtrx <- readRDS(file = path_str)
@@ -160,18 +183,35 @@ immune_decon_mtrx_ls <- lapply(decon_fn_ls, function(fn) {
 names_ls <- sapply(decon_fn_ls, USE.NAMES = FALSE, function(i) stringr::str_split(string = i, pattern = "_")[[1]][5])
 
 names(immune_decon_mtrx_ls) <- names_ls
+
+immune_decon_mtrx_ls[["GSM3036911"]] <- immune_decon_mtrx_ls[["GSM3036911"]][[2]]
+immune_decon_mtrx_ls[["GSM4100723"]] <- immune_decon_mtrx_ls[["GSM4100723"]][[2]]
 ```
 
 ## Plots
 ### Load all pdac-immune dataset
 ```{r}
 ica_se <- readRDS(sprintf("%s/data/pancreas_seuobj_atlas.rds", an_pdac))
-ica_se[["specific_cell_type_mod"]] <- dplyr::if_else(ica_se$specific_cell_type %in% 
-                                                   c("Macro_1", "Macro_2", "Macro_3"), 
-                                                 "Macrophages", 
-                                                 if_else(ica_se$specific_cell_type == "Mono",
-                                                         "Monocytes",
-                                                         as.character(ica_se$specific_cell_type)))
+# ica_se[["specific_cell_type_mod"]] <- dplyr::if_else(ica_se$specific_cell_type %in%
+#                                                    c("Macro_1", "Macro_2", "Macro_3"),
+#                                                  "Macrophages",
+#                                                  if_else(ica_se$specific_cell_type == "Mono",
+#                                                          "Monocytes",
+#                                                          as.character(ica_se$specific_cell_type)))
+  
+metadata <- ica_se@meta.data %>%
+  tibble::rownames_to_column("barcode") %>%
+  dplyr::left_join(update_annot,
+                   by = c("barcode")) %>% 
+  dplyr::mutate(specific_cell_type = cell_type.y) %>%
+  tibble::column_to_rownames("barcode")
+
+ica_se@meta.data <- metadata
+
+ica_se[["specific_cell_type_mod"]] <- ica_se[["specific_cell_type"]]
+
+table(update_annot$barcode %in% metadata$barcode)
+table(metadata$cell_type.y)
 ```
 
 ### Cell type table
@@ -220,15 +260,15 @@ cell_type_table <- flextable(count_wide) %>%
         part = "body", 
         align = "center")
 cell_type_table
-flextable_dim(cell_type_table)
+
 save_as_image(cell_type_table, 
-              path = sprintf("%s/%s/Supplementary_Table_2_PDAC-Immune.pdf",
+              path = sprintf("%s/%s/Supplementary_Table_2_PDAC-Immune_update.pdf",
                              an_pdac, plt_dir),
               zoom = 1, 
               expand = 100)
 
 save_as_docx(cell_type_table, 
-             path = sprintf("%s/%s/Supplementary_Table_4_PDAC-Unpaired.docx",
+             path = sprintf("%s/%s/Supplementary_Table_4_PDAC-Unpaired_update.docx",
                              an_pdac, plt_dir))
 ```
 
@@ -264,22 +304,15 @@ ica_umap <- DimPlot(ica_se,
 ica_umap
 
 saveRDS(object = ica_umap,
-        file = sprintf("%s/%s/immune_cells_UMAP.RDS",
+        file = sprintf("%s/%s/immune_cells_UMAP_update.RDS",
                                     an_pdac, plt_dir))
 
 ggpubr::ggexport(plotlist = list(ica_umap),
-                 filename = sprintf("%s/%s/immune_cells_UMAP.pdf",
+                 filename = sprintf("%s/%s/immune_cells_UMAP_update.pdf",
                                     an_pdac, plt_dir),
                  width = 12,
                  height = 9,
                  res = 600)
-
-ggpubr::ggexport(plotlist = list(ica_umap),
-                 filename = sprintf("%s/%s/immune_cells_UMAP.jpeg",
-                                    an_pdac, plt_dir),
-                 width = 4000,
-                 height = 3000,
-                 res = 400)
 ```
 
 ### Gene + Cell type arrangement
@@ -398,12 +431,6 @@ immune_signature_plts <- lapply(names(immune_decon_mtrx_ls), function(geo) {
   signature_colnames <- colnames(st_se@meta.data)[grepl(pattern = "signature",
                                                         x = colnames(st_se@meta.data))]
   
-  # Prepare object to plot signatures by puting the gene signatures in the counts slots
-  # rownames(decon_mtrx) <- rownames(st_se@meta.data)
-  # st_se@assays$RNA@scale.data <- t(st_se@meta.data[, signature_colnames])
-  # st_se@assays$RNA@data <- t(st_se@meta.data[, signature_colnames])
-  # st_se@meta.data <- cbind(st_se@meta.data, decon_mtrx)
-  
   # Plot Signatures
   sig_plt <- lapply(signature_colnames, function(firma){
     print(firma)
@@ -427,29 +454,6 @@ immune_signature_plts <- lapply(names(immune_decon_mtrx_ls), function(geo) {
          # alpha = "Signature score"
          )
 
-
-    # tmp_plt <- spanielPlot(object = st_se, 
-    #         grob = st_se@images[[1]],
-    #         plotType = "Gene",
-    #         gene = firma,
-    #         ptSizeMax = 0.5, 
-    #         ptSizeMin = 0.1,
-    #         customTitle = sprintf("%s; Signature for cell type: %s", 
-    #                               sample_dict[[geo]], pdac_plt_names[pdac_plt_names$firm_name == firma, "plt_name"])) +
-    #   theme_classic() +
-    #   theme(
-    #     plot.title = element_text(hjust = 0.5, size = 10),
-    #     axis.ticks = element_blank(),
-    #     axis.text = element_blank(),
-    #     axis.title = element_blank(),
-    #     axis.line = element_blank()
-    #     ) +
-    #   scale_color_gradientn(
-    #     colours = heat.colors(10, rev = TRUE),
-    #     name = "Score") +
-    #   scale_size_continuous(name = "Score", range = c(0, 3)) +
-    #   coord_fixed(1)
-    # 
     return(tmp_plt)
     })
   
@@ -489,8 +493,6 @@ immune_ct_plts <- lapply(names(immune_decon_mtrx_ls), function(geo) {
   # Plot cell type proportions
   rownames(decon_mtrx) <- rownames(st_se@meta.data)
   
-  # st_se@assays$RNA@scale.data <- t(decon_mtrx)
-  # st_se@assays$RNA@data <- t(decon_mtrx)
   st_se@meta.data <- cbind(st_se@meta.data, decon_mtrx)
 
   ct_plt <- lapply(cell_types, function(ct){
@@ -502,44 +504,15 @@ immune_ct_plts <- lapply(names(immune_decon_mtrx_ls), function(geo) {
                y = "y",
                point_colour = ct,
                point_size = ct) +
-    ggplot2::scale_size_continuous(range=c(0, 1), limits = c(0, 1)) +
+    # ggplot2::scale_size_continuous(range=c(0, 1), limits = c(0, 1)) +
     ggplot2::theme_void() +
     ggplot2::labs(title = sprintf("Proportion of %s", 
                                 # sample_dict[[geo]], 
                                 pdac_plt_names[pdac_plt_names$df_name == ct, "plt_name"])) +
-    theme(plot.title = element_text(hjust = 0.5, size = 9),
-          legend.title = element_text(hjust = 0.5, size = 7),
-          legend.text = element_text(hjust = 0.5, size = 7))
+    theme(plot.title = element_text(hjust = 0.5, size = 15),
+          legend.title = element_text(hjust = 0.5, size = 15),
+          legend.text = element_text(hjust = 0.5, size = 12))
 
-    # tmp_plt <- spanielPlot(object = st_se, 
-    #         grob = st_se@images[[1]],
-    #         plotType = "Gene",
-    #         gene = ct,
-    #         ptSizeMax = 0.5, 
-    #         ptSizeMin = 0,
-    #         customTitle = sprintf("%s; Proportion of cell type: %s", 
-    #                               sample_dict[[geo]], pdac_plt_names[pdac_plt_names$df_name == ct, "plt_name"])) +
-    #   # geom_point(aes(alpha = ct)) +
-    #   theme_classic() +
-    #   theme(
-    #     plot.title = element_text(hjust = 0.5, size = 10),
-    #     axis.ticks = element_blank(),
-    #     axis.text = element_blank(),
-    #     axis.title = element_blank(),
-    #     axis.line = element_blank()
-    #     ) +
-    #   scale_color_gradientn(
-    #     colours = heat.colors(10, rev = TRUE),
-    #     limits = c(0, 1),
-    #     name = "Proportion") +
-    #   scale_size_continuous(limits = c(0, 1), name = "Proportion", range = c(0, 3)) +
-    #   coord_fixed(1)
-    # ggpubr::ggexport(plotlist = list(tmp_plt),
-    #                  filename = sprintf("%s/%s/immune_cell_type_%s_plts_%s.jpeg",
-    #                                     an_pdac, plt_dir, ct, geo),
-    #                  width = 2500,
-    #                  height = 2000,
-    #                  res = 400)
     return(tmp_plt)
     })
   })
@@ -557,21 +530,13 @@ lapply(names(immune_ct_plts), function(geo) {
                     nrow = 5,
                     align = "hv")
   
-  ggpubr::ggexport(ct_arr, 
-                   filename = sprintf("%s/%s/immune_cell_type_arrange_plts_%s.pdf", 
+  ggpubr::ggexport(ct_arr,
+                   filename = sprintf("%s/%s/immune_cell_type_arrange_plts_%s_update.pdf", 
                                       an_pdac, plt_dir, geo),
                    width = 24,
                    height = 18,
                    res = 600)
-  
-  # ggpubr::ggexport(ct_arr, 
-  #                  filename = sprintf("%s/%s/immune_cell_type_arrange_plts_%s.jpeg", 
-  #                                     an_pdac, plt_dir, geo),
-  #                  width = 5000,
-  #                  height = 4000,
-  #                  res = 400)
 })
-
 ```
 
 ### Join signature - location
@@ -764,3 +729,104 @@ dev.off()
 par(mfrow = c(1, 1))
 
 ```
+
+By looking at correlations we want to assess if there are cell types which are correlating in space. So when one is present is another one also present?
+
+We will be using `ggcorrplot` to show these correlation plots a bit nicer:
+http://www.sthda.com/english/wiki/ggcorrplot-visualization-of-a-correlation-matrix-using-ggplot2
+
+Get correlation matrix between all cell types
+```{r eval = FALSE}
+# library(corrplot)
+library(ggcorrplot)
+
+# mat is a matrix object
+cor.mtest <- function(mat, conf.level = 0.95){
+    mat <- as.matrix(mat)
+    n <- ncol(mat)
+    p.mat <- lowCI.mat <- uppCI.mat <- matrix(NA, n, n)
+    diag(p.mat) <- 0
+    diag(lowCI.mat) <- diag(uppCI.mat) <- 1
+    for(i in 1:(n-1)){
+        for(j in (i+1):n){
+            tmp <- cor.test(mat[,i], mat[,j], conf.level = conf.level)
+            p.mat[i,j] <- p.mat[j,i] <- tmp$p.value
+            lowCI.mat[i,j] <- lowCI.mat[j,i] <- tmp$conf.int[1]
+            uppCI.mat[i,j] <- uppCI.mat[j,i] <- tmp$conf.int[2]
+        }
+    }
+    return(list(p.mat, lowCI.mat, uppCI.mat))
+}
+
+lapply(sample_pdac, function(i) {
+  decon_mtrx <- immune_decon_mtrx_ls[[i]]
+  decon_mtrx <- decon_mtrx[, colnames(decon_mtrx)[!colnames(decon_mtrx) %in% "res_ss"]]
+
+  decon_df <- data.frame(decon_mtrx)
+  # Remove cell types not predicted to be on the tissue
+  decon_df <- decon_df[, colSums(decon_df) > 0]
+  decon_cor <- cor(decon_df)
+  
+  # Change names to original ones
+  new_names <- data.frame(ct_name = colnames(decon_cor)) %>%
+    dplyr::left_join(plt_df, by = "ct_name") %>%
+    dplyr::pull(plt_name)
+  
+  # Compute correlation P-value
+  p.mat <- cor.mtest(decon_df, 0.95)
+  colnames(decon_cor) <- stringr::str_wrap(string = new_names, width = 30)
+  rownames(decon_cor) <- stringr::str_wrap(string = new_names, width = 30)
+  cor_plt <- ggcorrplot::ggcorrplot(corr = decon_cor,
+             # p.mat = p.mat[[1]],
+             hc.order = TRUE,
+             type = "full",
+             # insig = "blank",
+             lab = TRUE,
+             outline.col = "lightgrey",
+             method = "square",
+             # colors = c("#4477AA", "white", "#BB4444"))
+             colors = c("#6D9EC1", "white", "#E46726"),
+             title = "PDAC cell-cell proportion correlation",
+             legend.title = "Correlation\n(Pearson)") +
+     theme(
+      plot.title = element_text(size = 22, hjust = 0.5, face = "bold"),
+      legend.text = element_text(size = 12),
+      legend.title = element_text(size = 15),
+      axis.text.x = element_text(angle = 90),
+      axis.text = element_text(size = 18, vjust = 0.5))
+  cor_plt
+
+  cowplot::save_plot(plot = cor_plt,
+                   filename = sprintf("%s/%s/correlation_plot_PDAC_%s.pdf",
+                       an_pdac, plt_dir, i),
+                   base_width = 16,
+                   base_height = 12)
+  
+  # Now without labels
+  cor_plt <- ggcorrplot(corr = decon_cor,
+             p.mat = p.mat[[1]],
+             hc.order = TRUE,
+             type = "full",
+             # insig an_pdac, plt_dir= "blank",
+             lab = FALSE,
+             outline.col = "lightgrey",
+             method = "square",
+             # colors = c("#4477AA", "white", "#BB4444"))
+             colors = c("#6D9EC1", "white", "#E46726"),
+             title = "Breast carcinoma cell-cell proportion correlation",
+             legend.title = "Correlation\n(Pearson)") +
+    theme(
+      plot.title = element_text(size = 25, hjust = 0.5, face = "bold"),
+      legend.text = element_text(size = 18),
+      legend.title = element_text(size = 22),
+      axis.text.x = element_text(angle = 90, size = 18, vjust = 0.5),
+      axis.text.y = element_text(vjust = 0.5, size = 18))
+  
+  cowplot::save_plot(plot = cor_plt,
+                   filename = sprintf("%s/%s/correlation_plot_PDAC_%s_labeless.pdf",
+                       an_pdac, plt_dir, i),
+                   base_width = 16,
+                   base_height = 12)
+})
+```
+

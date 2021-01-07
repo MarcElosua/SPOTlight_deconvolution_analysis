@@ -518,29 +518,37 @@ cowplot::save_plot(plot = hipp_plt,
 #                      pie_scale = 0.2
 #                      )
 
+all_cell_types <- col_df$plt_names[col_df$plt_names != "L2/3"]
+
+cnames <- data.frame(ct_names = colnames(brain@meta.data)) %>%
+  dplyr::left_join(col_df, by = "ct_names") %>%
+  dplyr::mutate(ct_names = dplyr::if_else(is.na(plt_names), ct_names, plt_names)) %>%
+  dplyr::pull(ct_names)
+
+colnames(brain@meta.data) <- cnames
 anterior_plt <- spatial_scatterpie(se_obj = brain,
-                 cell_types_all = cell_types_metadata,
+                 cell_types_all = all_cell_types,
                  img_path = "data/MusMusculus/sag_ant_1/spatial/tissue_lowres_image.png",
                  slice = "Anterior", 
                  cell_types_interest = NULL,
                  pie_scale = 0.4
                  ) +
   scale_fill_manual(values = col_df[col_df$ct_names %in% cell_types_metadata, "col_vector"],
-                    breaks = cell_types_metadata) +
+                    breaks = all_cell_types) +
   labs(fill = "") +
   coord_fixed(ratio = 1) +
   theme(legend.position = "bottom") +
   guides(fill = guide_legend(nrow = 5))
 
 posterior_plt <- spatial_scatterpie(se_obj = brain,
-                 cell_types_all = cell_types_metadata,
+                 cell_types_all = all_cell_types,
                  img_path = "data/MusMusculus/sag_post_1/spatial/tissue_lowres_image.png",
                  slice = "Posterior", 
                  cell_types_interest = NULL,
                  pie_scale = 0.4
                  ) +
   scale_fill_manual(values = col_df[col_df$ct_names %in% cell_types_metadata, "col_vector"],
-                    breaks = cell_types_metadata) +
+                    breaks = all_cell_types) +
   labs(fill = "") +
   coord_fixed(ratio = 1) +
   theme(legend.position = "bottom") +
@@ -548,13 +556,13 @@ posterior_plt <- spatial_scatterpie(se_obj = brain,
 
 
 cowplot::save_plot(plot = anterior_plt, 
-               filename = sprintf("%s/%s/Figure_YYY_spatial_scatterpie_allen_anterior_%s_%s.pdf",
+               filename = sprintf("%s/%s/Figure_YYY_spatial_scatterpie_allen_anterior_%s_%s.svg",
                                 an_mouse, plt_dir, id_comp, id_nmf), 
                base_width = 16, 
                base_height = 12)
 
 cowplot::save_plot(plot = posterior_plt, 
-               filename = sprintf("%s/%s/Figure_YYY_spatial_scatterpie_allen_posterior_%s_%s.pdf",
+               filename = sprintf("%s/%s/Figure_YYY_spatial_scatterpie_allen_posterior_%s_%s.svg",
                                 an_mouse, plt_dir, id_comp, id_nmf), 
                base_width = 16, 
                base_height = 12)
@@ -591,18 +599,18 @@ joint_scatterpie_fun(se_obj = brain_mod,
 Combine all L2/3 neurons
 ```{r}
 brain_mod <- brain
-brain_mod@meta.data[["L2.3"]] <- rowSums(brain@meta.data[, c("L2.3.IT.Cdc14a", "L2.3.IT.Cxcl14", "L2.3.IT.Ndst4.Endou", "L2.3.IT.Otof", "L2.3.IT.Plch1")])
-brain_mod[["L2.3.IT.Cdc14a"]] <- NULL
-brain_mod[["L2.3.IT.Cxcl14"]] <- NULL
-brain_mod[["L2.3.IT.Ndst4.Endou"]] <- NULL
-brain_mod[["L2.3.IT.Otof"]] <- NULL
-brain_mod[["L2.3.IT.Plch1"]] <- NULL
+brain_mod@meta.data[["L2/3"]] <- rowSums(brain@meta.data[, c("L2/3 IT Cdc14a", "L2/3 IT Cxcl14", "L2/3 IT Ndst4 Endou", "L2/3 IT Otof", "L2/3 IT Plch1")])
+brain_mod[["L2/3 IT Cdc14a"]] <- NULL
+brain_mod[["L2/3 IT Cxcl14"]] <- NULL
+brain_mod[["L2/3 IT Ndst4 Endou"]] <- NULL
+brain_mod[["L2/3 IT Otof"]] <- NULL
+brain_mod[["L2/3 IT Plch1"]] <- NULL
 ```
 
 Scatterpie plot with all the celltypes together
 ```{r}
-cortex_layers_mod <- c("L2.3", "L4.IT", "L4.5.IT", "L5.ET", "L5.IT", "L6.CT", "L6.IT", "L6b")
-cell_types_metadata_mod <- c(cell_types_metadata[!cell_types_metadata %in% c("L2.3.IT.Cdc14a", "L2.3.IT.Cxcl14", "L2.3.IT.Ndst4.Endou", "L2.3.IT.Otof", "L2.3.IT.Plch1")], "L2.3")
+cortex_layers_mod <- c("L2/3", "L4 IT", "L4/5 IT", "L5 ET", "L5 IT", "L6 CT", "L6 IT", "L6b")
+cell_types_metadata_mod <- c(all_cell_types[!all_cell_types %in% c("L2/3 IT Cdc14a", "L2/3 IT Cxcl14", "L2/3 IT Ndst4 Endou", "L2/3 IT Otof", "L2/3 IT Plch1")], "L2/3")
 
 # general_cortex_plt <- joint_scatterpie_fun(se_obj = brain_mod,
 #                      cell_types_all = cell_types_metadata_mod,
@@ -623,7 +631,7 @@ anterior_plt <- spatial_scatterpie(se_obj = brain_mod,
                  slice = "Anterior", 
                  cell_types_interest = cortex_layers_mod, 
                  pie_scale = 0.4) +
-  scale_fill_manual(values = col_df[col_df$ct_names %in% cell_types_metadata_mod, "col_vector"],
+  scale_fill_manual(values = col_df[col_df$plt_names %in% cell_types_metadata_mod, "col_vector"],
                     breaks = cell_types_metadata_mod) +
   labs(fill = "") +
   coord_fixed(ratio = 1) +
@@ -636,7 +644,7 @@ posterior_plt <- spatial_scatterpie(se_obj = brain_mod,
                    slice = "Posterior", 
                    cell_types_interest = cortex_layers_mod,
                    pie_scale = 0.4) +
-  scale_fill_manual(values = col_df[col_df$ct_names %in% cell_types_metadata_mod, "col_vector"],
+  scale_fill_manual(values = col_df[col_df$plt_names %in% cell_types_metadata_mod, "col_vector"],
                     breaks = cell_types_metadata_mod) +
   labs(fill = "") +
   coord_fixed(ratio = 1) +
@@ -649,8 +657,8 @@ scatterpie_tmp <- cowplot::plot_grid(plotlist = list(anterior_plt[[1]] + theme(p
           nrow = 1)
 
 
-general_cortex_plt <- cowplot::plot_grid(plotlist = list(anterior_plt, 
-                                                         posterior_plt),
+general_cortex_plt <- cowplot::plot_grid(plotlist = list(anterior_plt,
+                                                         posterior_plt + theme(legend.position = "none")),
         ncol = 2,
         nrow = 1,
         align = "hv",

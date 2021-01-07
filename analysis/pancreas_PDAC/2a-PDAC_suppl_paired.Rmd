@@ -580,36 +580,6 @@ paired_ct_plts <- lapply(names(paired_decon_mtrx_ls), function(geo) {
                                   # sample_dict[[geo]], 
                                   df_col[df_col$df_name == ct, "plt_name"])) +
     theme(plot.title = element_text(hjust = 0.5, size = 10))
-    # tmp_plt <- spanielPlot(object = st_se, 
-    #         grob = st_se@images[[1]],
-    #         plotType = "Gene",
-    #         gene = ct,
-    #         ptSizeMax = 0.5, 
-    #         ptSizeMin = 0,
-    #         customTitle = sprintf("%s; Proportion of cell type: %s", 
-    #                               sample_dict[[geo]], df_col[df_col$df_name == ct, "plt_name"])) +
-    #   # geom_point(aes(alpha = ct)) +
-    #   theme_classic() +
-    #   theme(
-    #     plot.title = element_text(hjust = 0.5, size = 10),
-    #     axis.ticks = element_blank(),
-    #     axis.text = element_blank(),
-    #     axis.title = element_blank(),
-    #     axis.line = element_blank()
-    #     ) +
-    #   scale_color_gradientn(
-    #     colours = heat.colors(10, rev = TRUE),
-    #     limits = c(0, 1),
-    #     name = "Proportion") +
-    #   scale_size_continuous(limits = c(0, 1), name = "Proportion", range = c(0, 3)) +
-    #   coord_fixed(1)
-    # ggpubr::ggexport(plotlist = list(tmp_plt),
-    #                  filename = sprintf("%s/%s/paired_cell_type_%s_plts_%s.jpeg",
-    #                                     an_pdac, plt_dir, ct, geo),
-    #                  width = 2500,
-    #                  height = 2000,
-    #                  res = 400)
-
     
     return(tmp_plt)
     })
