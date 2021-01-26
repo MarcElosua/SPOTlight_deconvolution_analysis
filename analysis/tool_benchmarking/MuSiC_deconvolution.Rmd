@@ -6,7 +6,7 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 ```
 
 ## Introduction
@@ -79,10 +79,12 @@ music_deconv <- MuSiC::music_prop(bulk.eset = expr_mix,
                                   clusters = "nnet2",
                                   samples = "barcode",
                                   select.ct = NULL,
-                                  verbose = TRUE)
+                                  verbose = FALSE)
 tot_time <- difftime(time1 = Sys.time(),
                      time2 = strt,
                      units = "min")
+
+print(glue::glue("MuSiC took {round(tot_time, 2)} minutes to carry out the deconvolution"))
 
 saveRDS(object = music_deconv,
         file = here::here(sprintf("%s/%s/music_deconv.RDS", an_tools, robj_dir)))

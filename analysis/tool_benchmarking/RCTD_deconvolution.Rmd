@@ -1,0 +1,177 @@
+---
+title: "RCTD deconvolution"
+author: "Marc Elosua-Bayes"
+date: "10/19/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+In this Rmarkdown document we are going to use RCTD to deconvolute mixtures of cells. Ultimately the goal is to compare the performance with SPOTlight and other deconvolution tools. We use a consesus set of 1000 spots made out of between 2-8 cells reflecting the composition of Visium's spot. Synthetic mixtures and scRNAseq datasets are common for all the tools and are generated in the script common_synthetic_spots.Rmd
+
+RCTD is developed by Dylan M. Cable from Rafa Irizarry's lab, the preprint can be found [here](https://www.biorxiv.org/content/10.1101/2020.05.07.082750v1). 
+
+## Libraries
+Install RCTD package
+https://github.com/dmcable/RCTD
+```{r}
+# install.packages("devtools")
+# devtools::install_github("dmcable/RCTD", build_vignettes = TRUE)
+library(RCTD)
+library(Seurat)
+library(dplyr)
+```
+
+## Parameters
+```{r}
+set.seed(321)
+
+tech <- "QUARTZ-seq"
+org <- "hs"
+tissue <- "pbmc"
+dwn_smplng <- "both"
+source(here::here("misc/paths_vrs.R"))
+
+if (! file.exists(here::here(sprintf("analysis/%s/%s", an_tools, plt_dir)))) {
+  dir.create(sprintf("analysis/%s/%s", an_tools, plt_dir),
+             showWarnings = FALSE,
+             recursive = TRUE)
+  dir.create(here::here(sprintf("analysis/tool_benchmarking/%s", robj_dir)),
+             showWarnings = FALSE,
+             recursive = TRUE)
+}
+```
+
+## Load data
+Here we are loading the scRNAseq seurat object from QUARTZ-seq and the common synthetic spots. Both generated in the common_synthetic_spots.Rmd markdown document in this folder.
+```{r}
+se_quartz <- readRDS(file = here::here(sprintf("%s/%s/se_quartz.RDS", an_tools, robj_dir)))
+
+synthetic_mixtures <- readRDS(file = here::here(sprintf("%s/%s/common_synthetic_mixtures.RDS", an_tools, robj_dir)))
+```
+
+## Prep data
+vignette [here](https://raw.githack.com/dmcable/RCTD/dev/vignettes/spatial-transcriptomics.html)
+
+### scRNAseq reference
+```{r}
+RCTD_structure <- function(sc_obj, clust_vr) {
+  
+  sc_obj[["Name"]] = sc_obj@meta.data[, clust_vr]
+  
+  # Cell type dictionary between cluster and cell-type
+  ct <- unique(sc_obj@meta.data[, clust_vr])
+  df_ct <- data.frame("Cluster" = 1:length(ct),
+                      "Name" = ct)
+  
+  # 
+  metadata <- sc_obj@meta.data %>%
+    # Rownames to columns must be before left join since after it the rownames are erased
+    tibble::rownames_to_column("barcode") %>%
+    dplyr::left_join(df_ct, by = c("Name" = "Name")) %>%
+    # Change names to “barcode”, “cluster”, “nUMI”
+    mutate(
+      cluster = Cluster,
+      nUMI = nCount_RNA
+      ) %>%
+    dplyr::select(barcode, cluster, nUMI)
+  
+  expr_mtrx <- sc_obj@assays$RNA@counts
+  
+  return(list("meta_data" = metadata,
+              "cell_type_dict" = df_ct,
+              "dge" = expr_mtrx))
+}
+```
+
+```{r eval = FALSE}
+dir.create(here::here("analysis/tool_benchmarking/RCTD_data/reference"))
+sc_ls <- RCTD_structure(sc_obj = se_quartz,
+               clust_vr = "nnet2")
+
+readr::write_csv(x = sc_ls[[1]],
+                 path = here::here("analysis/tool_benchmarking/RCTD_data/reference/meta_data.csv"))
+
+readr::write_csv(x = sc_ls[[2]],
+                 path = here::here("analysis/tool_benchmarking/RCTD_data/reference/cell_type_dict.csv"))
+
+sc_ls[[3]] %>%
+  data.frame() %>%
+  tibble::rownames_to_column("gene") %>%
+  readr::write_csv(x = .,
+                   path = here::here("analysis/tool_benchmarking/RCTD_data/reference/dge.csv"),
+                   col_names = TRUE)
+
+```
+
+*Of note, here go to analysis/tool_benchmarking/RCTD_data/reference/dge.csv and remove the column name gene by "". If you don't it will detect the column as a gene and RCTD::dgeToSeurat won't be able to load the data*.
+
+### Spatial data
+```{r eval = FALSE}
+dir.create(here::here("analysis/tool_benchmarking/RCTD_data/spatial"))
+tmp <- synthetic_mixtures[[1]] %>%
+  data.frame() %>%
+  tibble::rownames_to_column("gene") %>% 
+  dplyr::mutate(spot_0 = spot_1) %>%
+  dplyr::select(gene, spot_0, everything()) %>% 
+  readr::write_csv(x = ,
+                   file = here::here("analysis/tool_benchmarking/RCTD_data/spatial/MappedDGEForR.csv"),
+                   col_names = TRUE)
+
+# Create aritificial coordinates for the synthetic spots
+nrow(synthetic_mixtures[[2]])
+
+# Since we have 1000 spots we can create an array of 20 * 50 matrix
+coord <- expand.grid(1:20, 1:50)
+colnames(coord) <- c("xcoord", "ycoord")
+df_coord <- data.frame("barcodes" = paste("spot",1:1000, sep = "_"), coord)
+
+readr::write_csv(x = df_coord,
+                 file = here::here("analysis/tool_benchmarking/RCTD_data/spatial/BeadLocationsForR.csv"))
+```
+
+## RCTD deconvolution
+### Read data in RCTD
+Read data in RCTD format
+```{r}
+reference <- RCTD::dgeToSeurat(refdir = here::here("analysis/tool_benchmarking/RCTD_data/reference"))
+puck <- RCTD::read.SpatialRNA(datadir = here::here("analysis/tool_benchmarking/RCTD_data/spatial"))
+```
+
+### Creating and running RCTD
+We are now ready to create an RCTD object using the create.RCTD function. We simply need to pass in the SpatialRNA and scRNA-seq objects. There are several configuration options that can be set with this function:
+```{r}
+myRCTD <- RCTD::create.RCTD(spatialRNA = puck,
+                            reference = reference,
+                            max_cores = 1,
+                            CELL_MIN = 18)
+```
+
+Now, we are ready to run RCTD, using the run.RCTD function. This function is equivalent to sequentially running the functions fitBulk, choose_sigma_c, and fitPixels. The doublet_mode argument sets whether RCTD will be run in ‘doublet mode’ (at most 1-2 cell types per pixel) or ‘full mode’ (no restrictions on number of cell types).
+```{r}
+myRCTD <- RCTD::run.RCTD(RCTD = myRCTD,
+                         doublet_mode = FALSE)
+```
+
+### Assess results
+The results of RCTD are located in the @results field. Of particular interest is @results$weights, a data frame of cell type weights for each pixel (for full mode).
+```{r}
+results <- myRCTD@results
+```
+
+normalize the cell type proportions to sum to 1.
+```{r}
+norm_weights <- sweep(results$weights, 1, rowSums(results$weights), '/') 
+rctd_deconv <- myRCTD@results$weights
+cell_type_names <- myRCTD@cell_type_info$info[[2]] #list of cell type names
+```
+
+### Save results
+```{r}
+saveRDS(object = myRCTD,
+        file = sprintf("%s/%s/rctd_deconv.RDS", an_tools, robj_dir))
+```
+
