@@ -1,0 +1,305 @@
+---
+title: "SPOTlight-CoGAPS Deconvolution"
+author: "Marc Elosua-Bayes"
+date: "11/5/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Introduction
+In this Rmarkdown document we are going to use SPOTlight but instead of using the [nNMF](https://cran.r-project.org/web/packages/NMF/index.html) implementation we're currently using we're going to use [CoGAPS](10.1186/s12859-020-03796-9). CoGAPS uses bayesian non-negative matrix factorization for single-cell analysis with asynchronous updates and sparse data structures. Ultimately the goal is to compare the performance with SPOTlight and other deconvolution tools. We use a consesus set of 1000 spots made out of between 2-8 cells reflecting the composition of Visium's spot. Synthetic mixtures and scRNAseq datasets are common for all the tools and are generated in the script common_synthetic_spots.Rmd
+
+Libraries
+```{r}
+# BiocManager::install("CoGAPS")
+library(CoGAPS)
+library(Seurat)
+library(dplyr)
+```
+
+
+## Parameters
+```{r}
+set.seed(321)
+
+tech <- "QUARTZ-seq"
+org <- "hs"
+tissue <- "pbmc"
+dwn_smplng <- "both"
+source("misc/paths_vrs.R")
+
+if (! file.exists(sprintf("analysis/%s/%s", an_tools, plt_dir))) {
+  dir.create(sprintf("analysis/%s/%s", an_tools, plt_dir),
+             showWarnings = FALSE,
+             recursive = TRUE)
+  dir.create(sprintf("analysis/tool_benchmarking/%s", robj_dir),
+             showWarnings = FALSE,
+             recursive = TRUE)
+}
+
+```
+
+## Load data
+Here we are loading the scRNAseq seurat object from QUARTZ-seq and the common synthetic spots. Both generated in the common_synthetic_spots.Rmd markdown document in this folder.
+```{r}
+se_quartz <- readRDS(file = sprintf("%s/%s/se_quartz.RDS", an_tools, robj_dir))
+
+synthetic_mixtures <- readRDS(file = sprintf("%s/%s/common_synthetic_mixtures.RDS", an_tools, robj_dir))
+```
+
+lognormalize mixture transcriptome
+```{r}
+mixture_transcriptome <- synthetic_mixtures[[1]]
+norm_mtrx <- apply(mixture_transcriptome, 1,
+                   function(i) log1p( (i / sum(i)) * 10000) ) %>%
+  scale(., center = TRUE, scale = TRUE) %>%
+  t(.)
+```
+
+## Analysis
+Normalize and Scale the data to compute marker genes
+```{r}
+se_quartz <- se_quartz %>%
+  Seurat::NormalizeData(.,
+                        normalization.method = "LogNormalize",
+                        scale.factor = 10000) %>%
+  Seurat::FindVariableFeatures(.,
+                               nfeatures = 3000) %>%
+  Seurat::ScaleData(.)
+```
+
+Obtain the marker genes for each cell type.
+```{r}
+Seurat::Idents(se_quartz) <- se_quartz$nnet2
+marker_genes <- Seurat::FindAllMarkers(object = se_quartz,
+                                       assay = "RNA",
+                                       slot = "data",
+                                       # min.pct = 0,
+                                       only.pos = TRUE,
+                                       # logfc.threshold = 0
+                                       )
+```
+
+Select union of genes between markers and 3000 HVG.
+```{r}
+sel_gg <- dplyr::union(marker_genes$gene,
+                       Seurat::VariableFeatures(se_quartz))
+
+# se_quartz <- Seurat::ScaleData(se_quartz, features = sel_gg)
+```
+
+Prepare the data to pass to `CoGAPS`.
+```{r}
+# Extract count matrix and subset it
+log_data <- se_quartz@assays$RNA@data
+log_data_sub <- log_data[sel_gg, ]
+
+# Set parameters
+params <- new("CogapsParams")
+## nPatterns is the number of patterns we want to detect
+params <- setParam(params, "nPatterns", round(length(unique(se_quartz$nnet2)) * 1.2))
+
+```
+
+Run CoGAPS 10 times to check the consistency between runs 
+```{r}
+cogaps_ls <- purrr::map(1:10, function(i)
+  
+  cogaps_obj <- CoGAPS::CoGAPS(
+    data = as.matrix(log_data_sub),
+    nIterations = 2000,
+    params = params,
+    nThreads = 6)
+
+)
+
+cogaps <- CoGAPS::CoGAPS(
+  data = as.matrix(log_data_sub),
+  nIterations = 2000,
+  params = params,
+  nThreads = 6)
+
+saveRDS(object = cogaps_ls,
+        file = here::here(glue::glue("{an_tools}/{robj_dir}/cogaps_list-10_consistency.rds")))
+```
+
+Load the previously run
+```{r}
+cogaps_ls <- readRDS(
+  file = here::here(
+    glue::glue(
+      "{an_tools}/{robj_dir}/cogaps_list-10_consistency.rds")
+    )
+  )
+
+# Plot Topic profile dotplots for each iteration
+
+dotplots_ls <- lapply(cogaps_ls, function(cogaps) {
+  profile_plt <- SPOTlight::dot_plot_profiles_fun(
+    h = t(cogaps@sampleFactors),
+    train_cell_clust = se_quartz$nnet2)
+  
+  plt1 <- profile_plt[[1]] +
+    labs(title = "CoGAPS: Topic proportions within cell types");
+
+  plt2 <- profile_plt[[2]] +
+    labs(title = "CoGAPS: Topic proportions by cell types");
+  
+  return(list(plt1,
+              plt2))
+})
+
+```
+
+Show consensus topic profiles
+```{r fig.height=25, fig.width=20}
+purrr::map(dotplots_ls, `[[`, 2) %>%
+  cowplot::plot_grid(plotlist = .,
+                     align = "hv",
+                     axis = "trbl",
+                     ncol = 3,
+                     nrow = 4)
+```
+
+Show cell-specific topic profiles
+```{r fig.height=25, fig.width=20}
+purrr::map(dotplots_ls, `[[`, 1) %>%
+  cowplot::plot_grid(plotlist = .,
+                     align = "hv",
+                     axis = "trbl",
+                     ncol = 3,
+                     nrow = 4) %>%
+  cowplot::save_plot(
+    filename = here::here(glue::glue("{an_tools}/{plt_dir}/CoGAPS_cell_specific_topics.pdf")),
+    plot = .,
+    base_height = 30,
+    base_width = 30)
+```
+
+The models show great consistency between them so we can select the 1st one to carry out the prediction
+Exteract basis and coefficient matrices
+```{r}
+coef <- t(cogaps_ls[[1]]@sampleFactors) # K * Cell
+basis <- cogaps_ls[[1]]@featureLoadings # gene * K
+```
+
+Look at the topic profile distribution
+```{r}
+cn <- colnames(coef)
+cn2 <- colnames(se_quartz)
+table(cn == cn2)
+
+dotplots <- SPOTlight::dot_plot_profiles_fun(
+  h = coef,
+  train_cell_clust = se_quartz@meta.data[, "nnet2"])
+```
+
+Cell-specific profiles -> we can see how all the cells show remarkably similar profiles
+```{r}
+dotplots[[1]]
+```
+
+Cell-type specific profiles -> We can see how most cell types have a specific dominant topic except for dendritic cells.
+```{r}
+dotplots[[2]]
+```
+
+Get cell type specific topif profiles
+```{r}
+ct_topic_profiles <- SPOTlight::topic_profile_per_cluster_nmf(
+  h = coef,
+  train_cell_clust = se_quartz@meta.data[, "nnet2"])
+```
+
+predict_spatial_mixtures_nmf_fun.R
+```{r}
+## Extract genes used in w, if there are genes not present add them with all 0
+keep_genes <- rownames(basis)[rownames(basis) %in% rownames(norm_mtrx)]
+# fill_genes <- rownames(basis(nmf_mod))[! rownames(basis(nmf_mod)) %in% rownames(mixture_transcriptome)]
+
+mixture_transcriptome_subs <- as.matrix(norm_mtrx[keep_genes, ])
+
+##### Extract Basis matrix W #####
+coef_pred <- matrix(data = NA,
+                  nrow = ncol(basis),
+                  ncol = ncol(mixture_transcriptome_subs))
+colnames(coef_pred) <- colnames(mixture_transcriptome_subs)
+
+##### Perform NNLS to get coefficients #####
+for (i in seq_len(ncol(mixture_transcriptome_subs))) {
+  nnls_pred <- nnls::nnls(A = basis, b = mixture_transcriptome_subs[, i])
+  coef_pred[, i] <- nnls_pred$x
+}
+```
+
+Perform deconvolution of the capture location mixtures
+```{r}
+min_cont <- 0.09
+# We add 1 extra column to add the residual error
+decon_mtrx <- matrix(data = NA,
+                     nrow = ncol(coef_pred),
+                     ncol = ncol(ct_topic_profiles) + 1)
+colnames(decon_mtrx) <- c(colnames(ct_topic_profiles), "res_ss")
+
+# create progress bar
+print("Deconvoluting spots")
+total <- ncol(coef_pred)
+pb <- txtProgressBar(min = 0, max = total, style = 3)
+
+for (i in seq_len(ncol(coef_pred))) {
+  print(i)
+  ## NNLS to get cell type composition
+  nnls_pred <- nnls::nnls(A = ct_topic_profiles, b = coef_pred[, i])
+  weights <- nnls_pred$x
+
+  ## get proportions of each cell type
+  if( sum(weights) > 0 ) {
+    comp <- weights / sum(weights)
+  } else {
+    comp <- rep(0, length(weights))
+  }
+  
+  ## Remove cell types not contributing the minimum
+  comp[comp < min_cont] <- 0
+  weights[comp < min_cont] <- 0
+
+  ### Updated proportions after filtering out minimum contributions
+  comp_prop <- comp / sum(comp)
+  comp_prop[is.na(comp_prop)] <- 0
+
+  ## Get Total sum of squares
+  fit_null <- 0
+  tot_ss <- sum((coef_pred[, i] - fit_null) ^ 2)
+
+  ## Get % of unexplained residuals
+  unexpl_ss <- nnls_pred$deviance / tot_ss
+
+  decon_mtrx[i, 1:(ncol(decon_mtrx) - 1)] <- comp_prop
+  decon_mtrx[i, ncol(decon_mtrx)] <- unexpl_ss
+
+  # update progress bar
+  setTxtProgressBar(pb, i)
+}
+# Close progress bar
+close(pb)
+```
+
+## Save prediction
+```{r}
+# probs_1[probs_1 < 0.09] <- 0
+saveRDS(object = decon_mtrx,
+        file = here::here(sprintf("%s/%s/SPOTlight-CoGAPS_deconv.RDS",
+                                  an_tools, robj_dir)))
+```
+
+## Session Info
+```{r}
+sessionInfo()
+```
+
+
